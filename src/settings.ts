@@ -41,7 +41,7 @@ export const DEFAULTS: Settings = {
 	pageFont: "serif",
 	pageSize: narrow ? 19 : 21,
 	lineHeight: 1.55,
-	justify: true,
+	justify: false,
 	wpm: 300,
 	wordSize: narrow ? 48 : 80,
 	sound: true,

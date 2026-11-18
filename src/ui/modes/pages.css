@@ -14,6 +14,12 @@
 	overflow: hidden;
 	cursor: pointer;
 }
+.mode-pages .pg-page {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	overflow: hidden;
+}
 .mode-pages .pg-content {
 	position: absolute;
 	left: 0;

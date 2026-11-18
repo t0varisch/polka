@@ -37,6 +37,27 @@ describe("buildChunks", () => {
 		expect(c[c.length - 1].toPara).toBe(count);
 		expect(c[c.length - 1].toWord).toBe(stream.words.length);
 	});
+	it("оглавление только из [0] — один кусок", () => {
+		const { stream, count } = book([5, 5, 5]);
+		const c = buildChunks(stream, count, [0]);
+		expect(c).toHaveLength(1);
+		expect([c[0].fromWord, c[0].toWord]).toEqual([0, 15]);
+	});
+	it("раздел из одних пустых абзацев не даёт пустого куска", () => {
+		for (const lens of [[5, 0, 0, 5], [5, 5, 0, 0], [0, 0, 5, 5]]) {
+			const { stream, count } = book(lens);
+			const c = buildChunks(stream, count, [1, 2]);
+			for (const x of c) expect(x.toWord).toBeGreaterThan(x.fromWord);
+			expect(c[0].fromWord).toBe(0);
+			expect(c[0].fromPara).toBe(0);
+			for (let i = 1; i < c.length; i++) {
+				expect(c[i].fromWord).toBe(c[i - 1].toWord);
+				expect(c[i].fromPara).toBe(c[i - 1].toPara);
+			}
+			expect(c[c.length - 1].toWord).toBe(stream.words.length);
+			expect(c[c.length - 1].toPara).toBe(count);
+		}
+	});
 	it("пустая книга", () => {
 		expect(buildChunks(buildWords([]), 0, [])).toEqual([]);
 	});

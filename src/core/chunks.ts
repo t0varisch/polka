@@ -40,6 +40,22 @@ export function buildChunks(stream: WordStream, paraCount: number, tocParas: num
 		push(from, end);
 		sectionStart = end;
 	}
+	return dropEmpty(out);
+}
+
+/** Куски без слов (разделы из одних пустых абзацев) присоединяются к соседям: пустой страницы не будет. */
+function dropEmpty(chunks: Chunk[]): Chunk[] {
+	const out: Chunk[] = [];
+	let carryPara = -1;
+	for (const c of chunks) {
+		if (c.fromWord === c.toWord) {
+			if (out.length > 0) out[out.length - 1].toPara = c.toPara;
+			else if (carryPara < 0) carryPara = c.fromPara;
+			continue;
+		}
+		out.push(carryPara >= 0 ? { ...c, fromPara: carryPara } : c);
+		carryPara = -1;
+	}
 	return out;
 }
 

@@ -9,6 +9,8 @@ import type { ModeFactory, ModeHost, ModeView } from "./types";
 
 /** Скорость для оценки «осталось». */
 const READ_WPM = 230;
+/** Ширина страницы на широком экране. */
+const MAX_PAGE_W = 760;
 const WHEEL_GAP_MS = 250;
 const SWIPE_PX = 40;
 const HERE_MS = 1500;
@@ -44,7 +46,8 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	const lang = detectLang(host.book.paragraphs);
 
 	const content = h("div.pg-content", { lang });
-	const viewport = h("div.pg-viewport", {}, content);
+	const pageBox = h("div.pg-page", {}, content);
+	const viewport = h("div.pg-viewport", {}, pageBox);
 	const foot = h("footer.pg-foot");
 	const view = h("div.mode-pages", {}, viewport, foot);
 
@@ -59,13 +62,13 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	let spans: HTMLElement[] = [];
 	/** Первое слово каждой страницы открытого куска (абсолютный номер). */
 	let firstOf: number[] = [];
-	/** Слово, на которое надо встать при ближайшей раскладке. */
-	let target = Math.max(0, Math.min(startWord, Math.max(0, total - 1)));
+	/** Место в книге: меняется только при листании, seek и входе; раскладка его не трогает. */
+	let anchor = Math.max(0, Math.min(startWord, Math.max(0, total - 1)));
 	let highlightNext = true;
 	let layoutSeq = 0;
 
 	function word(): number {
-		return firstOf[page] ?? target;
+		return anchor;
 	}
 
 	function margin(width: number): number {
@@ -77,22 +80,25 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		const w = viewport.clientWidth;
 		const hh = viewport.clientHeight;
 		if (w <= 0 || hh <= 0) return false;
-		const m = margin(w);
 		const lh = s.pageSize * s.lineHeight;
 		const padV = 16;
 		// Высота — целое число строк: внизу нет обрезанной строки
 		const lines = Math.max(1, Math.floor((hh - 2 * padV) / lh));
-		pageW = w;
+		pageW = Math.min(w, MAX_PAGE_W);
+		const off = Math.floor((w - pageW) / 2);
+		const m = margin(pageW);
 		view.style.setProperty("--pg-font", FONT_FAMILY[s.pageFont]);
 		view.style.setProperty("--pg-size", `${s.pageSize}px`);
 		view.classList.toggle("justify", s.justify);
 		const st = content.style;
 		st.lineHeight = `${lh}px`;
-		st.width = `${w - 2 * m}px`;
+		st.width = `${pageW - 2 * m}px`;
 		st.height = `${lines * lh}px`;
-		st.columnWidth = `${w - 2 * m}px`;
+		st.columnWidth = `${pageW - 2 * m}px`;
 		st.columnGap = `${2 * m}px`;
 		st.marginLeft = `${m}px`;
+		pageBox.style.left = `${off}px`;
+		pageBox.style.width = `${pageW}px`;
 		st.top = `${Math.floor((hh - lines * lh) / 2)}px`;
 		laidW = w;
 		laidH = hh;
@@ -184,31 +190,28 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 			renderChunk(i);
 			measure();
 		}
-		target = w;
 		showPage(pageOfWord(w));
 		if (highlight) flashHere(w);
 	}
 
-	/** Полная раскладка: геометрия, шрифты, измерение. Слово сохраняется. */
+	/** Полная раскладка: геометрия, шрифты, измерение. Место (anchor) не меняется и не сообщается. */
 	async function relayout(): Promise<void> {
 		if (disposed) return;
 		const seq = ++layoutSeq;
-		const keep = chunkIdx >= 0 ? word() : target;
 		if (!applyGeometry()) return;
 		chunkIdx = -1;
-		openWord(keep, false);
+		openWord(anchor, false);
 		// Шрифт мог ещё не загрузиться: после его прихода колонки другие, меряем заново
 		if (document.fonts && document.fonts.status === "loading") {
 			await document.fonts.ready;
 			if (disposed || seq !== layoutSeq) return;
 			chunkIdx = -1;
-			openWord(keep, false);
+			openWord(anchor, false);
 		}
 		if (highlightNext) {
 			highlightNext = false;
-			flashHere(target);
+			flashHere(anchor);
 		}
-		host.report(word());
 	}
 
 	function turn(dir: 1 | -1): void {
@@ -226,8 +229,9 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 			measure();
 			showPage(firstOf.length - 1);
 		} else return;
-		target = word();
-		host.report(target);
+		anchor = firstOf[page];
+		updateFoot();
+		host.report(anchor);
 	}
 
 	// ---- управление
@@ -235,6 +239,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		if (document.querySelector(".sheet-backdrop")) return;
 		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 		if (e.ctrlKey || e.metaKey || e.altKey) return;
+		if (e.key === " " && e.target instanceof HTMLButtonElement) return;
 		let dir = 0;
 		if (e.key === "ArrowLeft" || e.key === "PageUp" || (e.key === " " && e.shiftKey)) dir = -1;
 		else if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") dir = 1;
@@ -247,6 +252,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	viewport.addEventListener(
 		"wheel",
 		(e) => {
+			if (e.ctrlKey) return;
 			e.preventDefault();
 			const now = performance.now();
 			if (now - lastWheel < WHEEL_GAP_MS) return;
@@ -259,11 +265,14 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	);
 
 	let swipedAt = -1e9;
+	let multi = false;
 	let tx = 0;
 	let ty = 0;
 	viewport.addEventListener(
 		"touchstart",
 		(e) => {
+			if (e.touches.length > 1) multi = true;
+			else multi = false;
 			tx = e.touches[0].clientX;
 			ty = e.touches[0].clientY;
 		},
@@ -272,6 +281,10 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	viewport.addEventListener(
 		"touchend",
 		(e) => {
+			if (multi) {
+				if (e.touches.length === 0) multi = false;
+				return;
+			}
 			const t = e.changedTouches[0];
 			const dx = t.clientX - tx;
 			const dy = t.clientY - ty;
@@ -310,13 +323,13 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		word,
 		seek(w) {
 			if (disposed) return;
-			target = w;
+			anchor = Math.max(0, Math.min(w, Math.max(0, total - 1)));
 			if (laidW === 0) {
 				highlightNext = true;
 				return;
 			}
-			openWord(w, true);
-			host.report(word());
+			openWord(anchor, true);
+			host.report(anchor);
 		},
 		pause() {},
 		settingsRows() {
