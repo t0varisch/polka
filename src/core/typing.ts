@@ -25,10 +25,31 @@ const REPLACE: [RegExp, string][] = [
 	[/[­​-‍﻿]/g, ""],
 ];
 
+/**
+ * Нормализация абзаца вместе с картой символов: map[i] — индекс в нормализованной строке,
+ * куда попал символ i исходной (для p.length — длина результата). Удалённые символы
+ * (мягкий перенос, нулевая ширина, лишний пробел) получают индекс следующего оставшегося.
+ */
+export function normalizeWithMap(p: string): { text: string; map: Int32Array } {
+	const map = new Int32Array(p.length + 1);
+	let out = "";
+	for (let i = 0; i < p.length; i++) {
+		map[i] = out.length;
+		let rep = p[i];
+		for (const [re, to] of REPLACE) rep = rep.replace(re, to);
+		if (rep === " " && out.endsWith(" ")) continue; // сдвоенные пробелы схлопываются
+		out += rep;
+	}
+	// trim() как раньше: срезанные с краёв символы сдвигают карту
+	const lead = out.length - out.trimStart().length;
+	const text = out.trim();
+	map[p.length] = out.length;
+	for (let i = 0; i <= p.length; i++) map[i] = Math.min(Math.max(map[i] - lead, 0), text.length);
+	return { text, map };
+}
+
 export function normalizeParagraph(p: string): string {
-	let s = p;
-	for (const [re, to] of REPLACE) s = s.replace(re, to);
-	return s.replace(/ {2,}/g, " ").trim();
+	return normalizeWithMap(p).text;
 }
 
 export function buildTypingText(paragraphs: string[]): TypingText {

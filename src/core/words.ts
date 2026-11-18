@@ -30,30 +30,49 @@ const OPENERS = /^[«„“"'(\[]+$/u;
 const CLOSERS = /[»"”’'\)\]]+$/u;
 const LETTER = /[\p{L}\p{N}]/gu;
 
-function splitParagraph(p: string): string[] {
-	const raw = p.split(/[ \t\n\r]+/).filter(Boolean);
-	const out: string[] = [];
+/** Слово абзаца и индекс его первого символа в исходной строке. */
+interface Token {
+	text: string;
+	start: number;
+}
+
+/** Единственная разбивка абзаца на слова: её используют и buildWords, и wordStarts. */
+function splitWithStarts(p: string): Token[] {
+	const raw: Token[] = [];
+	for (const m of p.matchAll(/[^ \t\n\r]+/g)) raw.push({ text: m[0], start: m.index });
+	const out: Token[] = [];
 	let carry = "";
+	let carryStart = 0;
 	for (let i = 0; i < raw.length; i++) {
-		const t = raw[i];
+		const { text: t, start } = raw[i];
 		if (DASHES.test(t) || OPENERS.test(t)) {
 			// Тире и открывающая кавычка уходят к следующему слову: «— Привет»
+			if (!carry) carryStart = start;
 			carry += t + (DASHES.test(t) ? " " : "");
 			continue;
 		}
 		if (ONLY_PUNCT.test(t) && out.length > 0 && !carry) {
 			// Отбившаяся пунктуация («слово ,», «…») — к предыдущему слову
-			out[out.length - 1] += t;
+			out[out.length - 1].text += t;
 			continue;
 		}
-		out.push(carry + t);
+		out.push({ text: carry + t, start: carry ? carryStart : start });
 		carry = "";
 	}
 	if (carry) {
-		if (out.length > 0) out[out.length - 1] += " " + carry.trim();
-		else out.push(carry.trim());
+		if (out.length > 0) out[out.length - 1].text += " " + carry.trim();
+		else out.push({ text: carry.trim(), start: carryStart });
 	}
 	return out;
+}
+
+function splitParagraph(p: string): string[] {
+	return splitWithStarts(p).map((t) => t.text);
+}
+
+/** Индексы первых символов слов абзаца в исходной строке; та же разбивка, что в buildWords. */
+export function wordStarts(paragraph: string): number[] {
+	return splitWithStarts(paragraph).map((t) => t.start);
 }
 
 /** Базовая сила знака в конце слова: 2 — конец предложения, 1.4 — внутри, 1 — нет. */
