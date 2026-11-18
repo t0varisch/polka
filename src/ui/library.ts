@@ -144,17 +144,29 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 		return out;
 	}
 
+	let renderSeq = 0;
+	let disposed = false;
+
 	async function render(): Promise<void> {
-		const c = await currentLibrary();
-		cur = c;
-		top.replaceChildren(...buildTop(c));
-		const items = await c.lib.list();
-		list.replaceChildren();
-		if (items.length === 0) {
-			list.append(h("p.empty", {}, c.folder === "granted" ? "В папке пока нет книг. Положи туда файл или добавь книгу" : "Здесь пока пусто. Открой книгу — и начнём"));
-			return;
+		const seq = ++renderSeq;
+		try {
+			const c = await currentLibrary();
+			const items = await c.lib.list();
+			if (disposed || seq !== renderSeq) return;
+			cur = c;
+			top.replaceChildren(...buildTop(c));
+			list.replaceChildren();
+			if (items.length === 0) {
+				list.append(h("p.empty", {}, c.folder === "granted" ? "В папке пока нет книг. Положи туда файл или добавь книгу" : "Здесь пока пусто. Открой книгу — и начнём"));
+				return;
+			}
+			for (const it of items) list.append(card(c.lib, it));
+		} catch (e) {
+			if (disposed || seq !== renderSeq) return;
+			const msg = e instanceof Error ? e.message : "не получилось прочитать список книг";
+			toast(`Не получилось открыть библиотеку: ${msg}`, 6000);
+			list.replaceChildren(h("p.empty", {}, `Не получилось открыть библиотеку: ${msg}`));
 		}
-		for (const it of items) list.append(card(c.lib, it));
 	}
 
 	function card(lib: Library, it: ShelfItem): HTMLElement {
@@ -197,17 +209,23 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 	async function importFiles(files: File[]): Promise<void> {
 		if (files.length === 0) return;
 		askPersist();
-		const { lib } = cur ?? (await currentLibrary());
 		let lastKey = "";
-		for (const f of files) {
-			try {
-				const keys = await withProgress(busy, f.name, (p) => lib.addFiles([f], p));
-				if (keys[0]) lastKey = keys[0];
-			} catch (e) {
-				toast(`«${f.name}»: ${e instanceof Error ? e.message : "не получилось открыть"}`, 6000);
+		try {
+			const { lib } = cur ?? (await currentLibrary());
+			for (const f of files) {
+				try {
+					const keys = await withProgress(busy, f.name, (p) => lib.addFiles([f], p));
+					if (keys[0]) lastKey = keys[0];
+				} catch (e) {
+					if (!disposed) toast(`«${f.name}»: ${e instanceof Error ? e.message : "не получилось открыть"}`, 6000);
+				}
 			}
+		} catch (e) {
+			if (!disposed) toast(`Не получилось добавить книги: ${e instanceof Error ? e.message : "ошибка"}`, 6000);
+		} finally {
+			busy.textContent = "";
 		}
-		busy.textContent = "";
+		if (disposed) return;
 		if (files.length === 1 && lastKey) ctx.openBook(lastKey);
 		else render();
 	}
@@ -261,6 +279,7 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 	await render();
 
 	return () => {
+		disposed = true;
 		window.removeEventListener("dragover", onDragOver);
 		window.removeEventListener("dragleave", onDragLeave);
 		window.removeEventListener("drop", onDrop);

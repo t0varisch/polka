@@ -40,7 +40,7 @@ async function route(): Promise<void> {
 		else done();
 	} catch (e) {
 		console.error(e);
-		toast("Что-то сломалось. Обнови страницу.", 5000);
+		toast("Что-то сломалось — обнови страницу", 5000);
 	}
 }
 
