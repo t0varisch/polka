@@ -91,6 +91,13 @@ function mountBook(
 	let mode: Mode = urlMode ?? record.position.mode;
 	let view: ModeView | null = null;
 	let switching = false;
+	/** Идёт запуск режима (в том числе первый): кнопки режимов не работают. */
+	let starting = false;
+	let startSeq = 0;
+	/** Режим, который нажали во время запуска: включается, когда запуск закончится. */
+	let pendingMode: Mode | null = null;
+	let flashTimer: ReturnType<typeof setTimeout> | undefined;
+	const sheetClosers: (() => void)[] = [];
 
 	// ---- сохранение: только изменения, не чаще раза в SAVE_EVERY_MS
 	let dirty = record.wordCount !== total;
@@ -202,11 +209,13 @@ function mountBook(
 		touch();
 		flush();
 		bookmarkBtn.classList.add("flash");
-		setTimeout(() => bookmarkBtn.classList.remove("flash"), 600);
+		clearTimeout(flashTimer);
+		flashTimer = setTimeout(() => bookmarkBtn.classList.remove("flash"), 600);
 		toast("Закладка добавлена");
 	}
 
 	function removeBookmark(id: string): void {
+		if (isDisposed()) return;
 		record.bookmarks = record.bookmarks.filter((x) => x.id !== id);
 		touch();
 		flush();
@@ -215,20 +224,22 @@ function mountBook(
 	function openNavSheet(): void {
 		if (isDisposed()) return;
 		view?.pause();
-		openNav({
+		sheetClosers.push(
+			openNav({
 			stream,
 			chapters,
 			bookmarks: () => record.bookmarks,
 			word: () => (view ? view.word() : record.position.word),
 			seek: (w) => view?.seek(w),
 			removeBookmark,
-		});
+		}),
+		);
 	}
 
 	function openSettingsSheet(): void {
 		if (isDisposed()) return;
 		view?.pause();
-		openSettings(settings, () => ctx.saveSettings(), view?.settingsRows() ?? []);
+		sheetClosers.push(openSettings(settings, () => ctx.saveSettings(), view?.settingsRows() ?? []));
 	}
 
 	const host: ModeHost = {
@@ -240,6 +251,7 @@ function mountBook(
 		flush,
 		addBookmark,
 		openNav: openNavSheet,
+		openSettings: openSettingsSheet,
 		goLibrary: () => ctx.goLibrary(),
 		updateTyping(t) {
 			record.typing = t;
@@ -253,18 +265,36 @@ function mountBook(
 		if (location.hash !== url) history.replaceState(null, "", url);
 	}
 
+	/** Запуск режима с токеном: если за время ожидания фабрики запуск устарел или экран закрыт, готовый режим сразу уничтожается. */
 	async function startMode(next: Mode, word: number): Promise<void> {
-		const created = await FACTORIES[next](host, word);
-		if (isDisposed()) {
-			created.destroy();
-			return;
+		const token = ++startSeq;
+		starting = true;
+		try {
+			const created = await FACTORIES[next](host, word);
+			if (isDisposed() || token !== startSeq) {
+				created.destroy();
+				return;
+			}
+			view = created;
+			body.replaceChildren(created.root);
+		} finally {
+			if (token === startSeq) starting = false;
 		}
-		view = created;
-		body.replaceChildren(created.root);
+	}
+
+	function showFailure(e: unknown): void {
+		const msg = e instanceof Error ? e.message : "ошибка";
+		toast(`Не получилось открыть режим: ${msg}`, 4000);
+		body.replaceChildren(h("div.mode-stub", {}, h("button.secondary", { type: "button", onclick: () => ctx.goLibrary() }, "К библиотеке")));
 	}
 
 	async function switchMode(next: Mode): Promise<void> {
-		if (isDisposed() || switching || next === mode) return;
+		if (isDisposed()) return;
+		if (starting || switching) {
+			pendingMode = next;
+			return;
+		}
+		if (next === mode) return;
 		switching = true;
 		const prev = mode;
 		try {
@@ -286,15 +316,26 @@ function mountBook(
 			} catch (e) {
 				console.error(e);
 				if (isDisposed()) return;
-				toast("Не получилось открыть этот режим");
 				mode = prev;
 				showMode();
 				setUrl();
-				await startMode(prev, word);
+				try {
+					await startMode(prev, word);
+				} catch (e2) {
+					console.error(e2);
+					if (!isDisposed()) showFailure(e2);
+				}
 			}
 		} finally {
 			switching = false;
+			runPending();
 		}
+	}
+
+	function runPending(): void {
+		const next = pendingMode;
+		pendingMode = null;
+		if (next && next !== mode) void switchMode(next);
 	}
 
 	// ---- клавиши оболочки; в печати Escape и буквы принадлежат режиму
@@ -318,16 +359,21 @@ function mountBook(
 	showWord(start);
 	setUrl();
 	scheduleSave();
-	startMode(mode, start).catch((e) => {
-		console.error(e);
-		if (!isDisposed()) toast("Не получилось открыть режим", 4000);
-	});
+	startMode(mode, start)
+		.catch((e) => {
+			console.error(e);
+			if (!isDisposed()) showFailure(e);
+		})
+		.finally(runPending);
 
 	return () => {
 		if (isDisposed()) return;
 		flush();
 		setDisposed(true);
 		clearTimeout(saveTimer);
+		clearTimeout(flashTimer);
+		for (const close of sheetClosers) close();
+		startSeq++;
 		view?.destroy();
 		view = null;
 		document.removeEventListener("keydown", onKey);

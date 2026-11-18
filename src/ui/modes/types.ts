@@ -15,6 +15,8 @@ export interface ModeHost {
 	flush(): void;
 	addBookmark(): void;
 	openNav(): void;
+	/** Лист настроек (общие + строки режима). */
+	openSettings(): void;
 	goLibrary(): void;
 	updateTyping(t: BookRecord["typing"]): void;
 }

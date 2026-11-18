@@ -386,7 +386,7 @@ div.book {
 	font-weight: 600;
 }
 .mode-btn span {
-	display: none;
+	display: inline;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -395,9 +395,9 @@ div.book {
 	background: var(--hl);
 	color: var(--fg);
 }
-@media (min-width: 400px) {
+@media (max-width: 339px) {
 	.mode-btn span {
-		display: inline;
+		display: none;
 	}
 }
 .book-body {

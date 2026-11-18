@@ -43,7 +43,7 @@ export const wordsMode: ModeFactory = async (host: ModeHost, startWord: number):
 	let stream: WordStream = level === SHARED_LEVEL ? host.stream : buildWords(host.book.paragraphs, level);
 
 	const playBtn = h("button.play", { type: "button", "aria-label": "Читать" }, icon("play", 30));
-	const wpmOut = h("div.wpm", { "aria-label": "Скорость" });
+	const wpmOut = h("button.wpm", { type: "button", "aria-label": "Скорость" });
 	const metaLine = h("div.meta");
 	const word = wordEl("word");
 	const prevWord = wordEl("ctx-word.prev");
@@ -219,6 +219,7 @@ export const wordsMode: ModeFactory = async (host: ModeHost, startWord: number):
 		player.toggle();
 	};
 	playBtn.addEventListener("click", togglePlay);
+	wpmOut.addEventListener("click", () => host.openSettings());
 	stage.addEventListener("click", togglePlay);
 
 	const onKey = (e: KeyboardEvent) => {

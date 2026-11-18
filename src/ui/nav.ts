@@ -36,7 +36,7 @@ export interface NavCtx {
 	removeBookmark(id: string): void;
 }
 
-export function openNav(ctx: NavCtx): void {
+export function openNav(ctx: NavCtx): () => void {
 	const n = ctx.stream.words.length;
 	const pctOf = (w: number) => (n > 1 ? (w / (n - 1)) * 100 : 0);
 	const snip = (w: number) => snippetAt(ctx.stream, w, 9);
@@ -122,4 +122,5 @@ export function openNav(ctx: NavCtx): void {
 	const body = h("div.nav", {}, h("label.row.range-row", {}, h("span.row-label", {}, "Позиция", posOut), pos), h("div.tabs", { role: "tablist" }, tabToc, tabMarks), panes);
 	const close = openSheet("Навигация", body);
 	requestAnimationFrame(() => tocList.querySelector(".current")?.scrollIntoView({ block: "center" }));
+	return close;
 }
