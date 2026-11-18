@@ -49,7 +49,7 @@ function looksLikeText(b: Uint8Array): boolean {
 	return zeros === 0 && ctrl < n * 0.01;
 }
 
-async function readBytes(file: Blob): Promise<Uint8Array> {
+export async function readBytes(file: Blob): Promise<Uint8Array> {
 	if (typeof file.arrayBuffer === "function") return new Uint8Array(await file.arrayBuffer());
 	return new Promise((resolve, reject) => {
 		const r = new FileReader();
