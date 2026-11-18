@@ -35,6 +35,8 @@ const PATHS: Record<string, string> = {
 	trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
 	book: '<path d="M4 4h6a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z"/>',
 	text: '<path d="M5 5h14M5 10h14M5 15h9M5 20h6"/>',
+	keyboard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
+	folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
 };
 
 export function icon(name: keyof typeof PATHS | string, size = 22): SVGSVGElement {

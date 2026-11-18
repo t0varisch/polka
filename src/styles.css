@@ -783,3 +783,49 @@ input[type="checkbox"][role="switch"]:checked::before {
 	text-decoration: none;
 	min-height: 44px;
 }
+
+/* строка папки и мелочи библиотеки */
+.lib-top {
+	display: grid;
+	gap: 10px;
+}
+.folder-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 14px;
+}
+.folder-name {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1 1 100%;
+	min-width: 0;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.link {
+	min-height: 40px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--accent);
+	font-weight: 600;
+}
+.primary.wide {
+	flex: none;
+	width: 100%;
+	white-space: normal;
+	text-align: center;
+}
+.lib-top .formats {
+	margin: 0;
+}
+.book-mode {
+	display: inline-flex;
+	vertical-align: -2px;
+	margin-right: 6px;
+}
+.book-stub {
+	padding: 16px 0;
+}

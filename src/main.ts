@@ -1,10 +1,11 @@
 import "./styles.css";
 import { registerSW } from "virtual:pwa-register";
 import { applyTheme, loadSettings, saveSettings, watchSystemTheme } from "./settings";
-import { askPersist } from "./store";
+import { askPersist } from "./library/db";
+import type { Mode } from "./types";
 import { toast } from "./ui/dom";
 import { openLibrary } from "./ui/library";
-import { openReader } from "./ui/reader";
+import { openBookStub } from "./ui/book-stub";
 
 const root = document.getElementById("app") as HTMLElement;
 const settings = loadSettings();
@@ -25,15 +26,15 @@ async function route(): Promise<void> {
 	const seq = ++routeSeq;
 	cleanup?.();
 	cleanup = null;
-	const m = location.hash.match(/^#\/read\/(.+)$/);
+	const m = location.hash.match(/^#\/read\/([^/]+)(?:\/(pages|words|typing))?$/);
 	try {
 		const done = m
-			? await openReader(root, decodeURIComponent(m[1]), { settings, saveSettings: persist, goLibrary: () => (location.hash = "#/") })
+			? await openBookStub(root, decodeURIComponent(m[1]), (m[2] as Mode | undefined) ?? null, { goLibrary: () => (location.hash = "#/") })
 			: await openLibrary(root, {
 					settings,
 					saveSettings: persist,
 					onSettingsChange: () => applyTheme(settings),
-					openBook: (id) => (location.hash = `#/read/${encodeURIComponent(id)}`),
+					openBook: (key) => (location.hash = `#/read/${encodeURIComponent(key)}`),
 				});
 		if (seq === routeSeq) cleanup = done;
 		else done();
