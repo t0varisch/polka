@@ -1,0 +1,63 @@
+/* Режим «Страницы»: окно с колонками CSS, одна колонка — одна страница */
+.mode-pages {
+	display: grid;
+	grid-template-rows: minmax(0, 1fr) auto;
+	grid-template-columns: minmax(0, 1fr);
+	min-height: 0;
+	min-width: 0;
+	overflow: hidden;
+}
+.mode-pages .pg-viewport {
+	position: relative;
+	min-height: 0;
+	min-width: 0;
+	overflow: hidden;
+	cursor: pointer;
+}
+.mode-pages .pg-content {
+	position: absolute;
+	left: 0;
+	top: 0;
+	margin: 0;
+	column-fill: auto;
+	font-family: var(--pg-font);
+	font-size: var(--pg-size);
+	color: var(--fg);
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+	overflow-wrap: break-word;
+}
+.mode-pages.justify .pg-content {
+	text-align: justify;
+	hyphens: auto;
+	-webkit-hyphens: auto;
+}
+.mode-pages .pg-content p {
+	margin: 0;
+	text-indent: 1.4em;
+}
+.mode-pages .pg-content h2 {
+	margin: 0;
+	font-size: 1.3em;
+	font-weight: 600;
+	line-height: inherit;
+	text-align: left;
+	text-indent: 0;
+	hyphens: manual;
+	break-after: avoid;
+}
+.mode-pages .pg-content span.here {
+	background: var(--hl);
+	border-radius: 3px;
+	box-shadow: 0 0 0 2px var(--hl);
+}
+.mode-pages .pg-foot {
+	padding: 8px 20px calc(10px + var(--safe-bottom));
+	font-size: 13px;
+	color: var(--muted);
+	text-align: center;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-variant-numeric: tabular-nums;
+}
