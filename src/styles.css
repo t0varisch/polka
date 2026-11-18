@@ -238,7 +238,7 @@ a {
 	display: grid;
 	gap: 10px;
 }
-.book {
+article.book {
 	display: flex;
 	align-items: center;
 	gap: 4px;
@@ -299,9 +299,9 @@ a {
 }
 
 /* ---------- чтение ---------- */
-.reader {
+div.book {
 	display: grid;
-	grid-template-rows: auto auto 1fr auto auto;
+	grid-template-rows: auto auto auto minmax(0, 1fr);
 	grid-template-columns: minmax(0, 1fr);
 	height: 100dvh;
 	padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
@@ -345,19 +345,83 @@ a {
 	color: var(--fg);
 }
 .topbar,
-.controls {
+.modes,
+.mode-words .controls {
 	transition: opacity 0.35s ease;
 }
-.reader[data-playing="true"] .topbar,
-.reader[data-playing="true"] .controls {
+.book:has(.mode-words[data-playing="true"]) .topbar,
+.book:has(.mode-words[data-playing="true"]) .modes,
+.mode-words[data-playing="true"] .controls {
 	opacity: 0.12;
 }
-.reader[data-playing="true"] .topbar:hover,
-.reader[data-playing="true"] .controls:hover {
+.book:has(.mode-words[data-playing="true"]) .topbar:hover,
+.book:has(.mode-words[data-playing="true"]) .modes:hover,
+.mode-words[data-playing="true"] .controls:hover {
 	opacity: 1;
 }
 
-.stage {
+/* переключатель режимов: на узком экране только значки */
+.modes {
+	display: flex;
+	gap: 4px;
+	margin: 4px 10px 2px;
+	padding: 3px;
+	border-radius: 12px;
+	background: var(--surface);
+}
+.mode-btn {
+	display: flex;
+	flex: 1;
+	min-width: 0;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	height: 38px;
+	padding: 0 6px;
+	border: 0;
+	border-radius: 9px;
+	background: transparent;
+	color: var(--muted);
+	font-size: 14px;
+	font-weight: 600;
+}
+.mode-btn span {
+	display: none;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.mode-btn[aria-pressed="true"] {
+	background: var(--hl);
+	color: var(--fg);
+}
+@media (min-width: 400px) {
+	.mode-btn span {
+		display: inline;
+	}
+}
+.book-body {
+	display: grid;
+	min-height: 0;
+	min-width: 0;
+}
+.book.loading {
+	display: block;
+	padding: 16px;
+}
+.mode-words {
+	display: grid;
+	grid-template-rows: minmax(0, 1fr) auto auto;
+	grid-template-columns: minmax(0, 1fr);
+	min-height: 0;
+}
+.mode-stub {
+	display: grid;
+	place-items: center;
+	color: var(--muted);
+}
+
+.mode-words .stage {
 	position: relative;
 	display: flex;
 	flex-direction: column;
@@ -369,51 +433,51 @@ a {
 	-webkit-user-select: none;
 	touch-action: manipulation;
 }
-.focus {
+.mode-words .focus {
 	position: relative;
 	height: calc(var(--word-size, 64px) * 1.75);
 	flex: none;
 }
 .word,
-.ctx-word {
+.mode-words .ctx-word {
 	width: max-content;
 	white-space: pre;
 	font-family: var(--word-font);
 	line-height: 1.2;
 	will-change: transform;
 }
-.word {
+.mode-words .word {
 	position: absolute;
 	left: 0;
 	top: 50%;
 	margin-top: -0.6em;
 }
-.word .p {
+.mode-words .word .p {
 	color: var(--accent);
 }
-.ctx-word {
+.mode-words .ctx-word {
 	position: relative;
 	color: var(--muted);
 	opacity: 0.55;
 	margin: 6px 0;
 }
-.reader:not(.with-context) .ctx-word {
+.mode-words:not(.with-context) .ctx-word {
 	display: none;
 }
-.guide {
+.mode-words .guide {
 	position: absolute;
 	left: 0;
 	right: 0;
 	height: 1px;
 	background: var(--line);
 }
-.guide.top {
+.mode-words .guide.top {
 	top: 0;
 }
-.guide.bottom {
+.mode-words .guide.bottom {
 	bottom: 0;
 }
-.guide i {
+.mode-words .guide i {
 	position: absolute;
 	left: var(--anchor, 40%);
 	width: 2px;
@@ -421,17 +485,17 @@ a {
 	height: calc(var(--word-size, 64px) * 0.22);
 	background: var(--line);
 }
-.guide.top i {
+.mode-words .guide.top i {
 	top: 0;
 }
-.guide.bottom i {
+.mode-words .guide.bottom i {
 	bottom: 0;
 }
-.reader:not(.with-guides) .guide {
+.mode-words:not(.with-guides) .guide {
 	display: none;
 }
 
-.pause-view {
+.mode-words .pause-view {
 	max-height: 28dvh;
 	overflow-y: auto;
 	padding: 0 20px;
@@ -439,37 +503,37 @@ a {
 	font-size: 16px;
 	line-height: 1.6;
 }
-.pause-view:empty {
+.mode-words .pause-view:empty {
 	display: none;
 }
-.pause-view p {
+.mode-words .pause-view p {
 	max-width: 640px;
 	margin: 0 auto 8px;
 }
-.pause-view span {
+.mode-words .pause-view span {
 	cursor: pointer;
 	border-radius: 4px;
 }
-.pause-view span:hover {
+.mode-words .pause-view span:hover {
 	color: var(--fg);
 }
-.pause-view .here {
+.mode-words .pause-view .here {
 	color: var(--fg);
 	background: var(--hl);
 	box-shadow: 0 0 0 2px var(--hl);
 }
 
-.controls {
+.mode-words .controls {
 	padding: 8px 12px calc(12px + var(--safe-bottom));
 }
-.control-row {
+.mode-words .control-row {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	justify-content: center;
 	gap: 6px 14px;
 }
-.play {
+.mode-words .play {
 	display: grid;
 	place-items: center;
 	width: 64px;
@@ -479,11 +543,13 @@ a {
 	background: var(--accent);
 	color: var(--on-accent);
 }
-.speed {
+.mode-words .speed {
 	display: flex;
 	align-items: center;
 }
-.wpm {
+.mode-words .wpm {
+	display: grid;
+	place-items: center;
 	min-width: 104px;
 	height: 44px;
 	border: 0;
@@ -492,10 +558,10 @@ a {
 	font-variant-numeric: tabular-nums;
 	font-size: 15px;
 }
-.wpm:hover {
+.mode-words .wpm:hover {
 	background: var(--hover);
 }
-.meta {
+.mode-words .meta {
 	margin-top: 4px;
 	text-align: center;
 	font-size: 13px;
@@ -825,7 +891,4 @@ input[type="checkbox"][role="switch"]:checked::before {
 	display: inline-flex;
 	vertical-align: -2px;
 	margin-right: 6px;
-}
-.book-stub {
-	padding: 16px 0;
 }

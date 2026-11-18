@@ -5,7 +5,7 @@ import { askPersist } from "./library/db";
 import type { Mode } from "./types";
 import { toast } from "./ui/dom";
 import { openLibrary } from "./ui/library";
-import { openBookStub } from "./ui/book-stub";
+import { openBook } from "./ui/book";
 
 const root = document.getElementById("app") as HTMLElement;
 const settings = loadSettings();
@@ -29,7 +29,12 @@ async function route(): Promise<void> {
 	const m = location.hash.match(/^#\/read\/([^/]+)(?:\/(pages|words|typing))?$/);
 	try {
 		const done = m
-			? await openBookStub(root, decodeURIComponent(m[1]), (m[2] as Mode | undefined) ?? null, { goLibrary: () => (location.hash = "#/") })
+			? await openBook(root, decodeURIComponent(m[1]), (m[2] as Mode | undefined) ?? null, {
+					settings,
+					saveSettings: persist,
+					goLibrary: () => (location.hash = "#/"),
+					alive: () => seq === routeSeq,
+				})
 			: await openLibrary(root, {
 					settings,
 					saveSettings: persist,

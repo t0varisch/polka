@@ -4,10 +4,17 @@ export type Theme = "auto" | "light" | "paper" | "dark" | "black";
 export type FontKind = "mono" | "serif" | "sans";
 
 export interface Settings {
-	wpm: number;
-	fontSize: number;
-	font: FontKind;
 	theme: Theme;
+	/** Шрифт слова — для режимов «По слову» и «Печать». */
+	font: FontKind;
+	// Страницы
+	pageFont: FontKind;
+	pageSize: number;
+	lineHeight: number;
+	justify: boolean;
+	// По слову
+	wpm: number;
+	wordSize: number;
 	sound: boolean;
 	/** Предыдущее и следующее слово бледно сверху и снизу. */
 	context: boolean;
@@ -16,23 +23,37 @@ export interface Settings {
 	ramp: boolean;
 	smart: boolean;
 	pauses: PauseLevel;
+	// Печать
+	typeSize: number;
+	typeSound: boolean;
+	caseSensitive: boolean;
+	punctuation: boolean;
 }
 
 const KEY = "polka:settings";
 const narrow = typeof window !== "undefined" && window.innerWidth < 768;
 
 // Значения по умолчанию повторяют Speeedy, на котором Роман проверял чтение (19.10.2026)
+// По слову и печать — как в Точке и Печатке; страницы — пробы (18.11.2026), Роман не утверждал
 export const DEFAULTS: Settings = {
-	wpm: 300,
-	fontSize: narrow ? 48 : 80,
-	font: "mono",
 	theme: "auto",
+	font: "mono",
+	pageFont: "serif",
+	pageSize: narrow ? 19 : 21,
+	lineHeight: 1.55,
+	justify: true,
+	wpm: 300,
+	wordSize: narrow ? 48 : 80,
 	sound: true,
 	context: true,
 	guides: true,
 	ramp: true,
 	smart: false,
 	pauses: 2,
+	typeSize: narrow ? 26 : 34,
+	typeSound: false,
+	caseSensitive: true,
+	punctuation: true,
 };
 
 export const WPM_MIN = 100;

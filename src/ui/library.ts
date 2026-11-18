@@ -7,7 +7,7 @@ import type { BookRecord, Mode } from "../types";
 import { formatDuration, h, icon, iconButton, openSheet, plural, toast } from "./dom";
 import { inAppBrowser, isStandalone, platform } from "./inapp";
 import { withProgress } from "./progress";
-import { openSettings } from "./settings-sheet";
+import { openSettings, speedRow } from "./settings-sheet";
 
 export interface LibraryCtx {
 	settings: Settings;
@@ -94,7 +94,7 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 			"header.lib-head",
 			{},
 			h("div", {}, h("h1", {}, "Полка"), h("p.tagline", {}, "Книги страницами, по слову и печатая")),
-			iconButton("gear", "Настройки", () => openSettings(ctx.settings, () => (ctx.saveSettings(), ctx.onSettingsChange(), render()))),
+			iconButton("gear", "Настройки", () => openSettings(ctx.settings, () => (ctx.saveSettings(), ctx.onSettingsChange(), render()), [speedRow(ctx.settings, (v) => ((ctx.settings.wpm = v), ctx.saveSettings(), render()))])),
 		),
 		top,
 		app ? inAppBanner(app) : installHint(),
