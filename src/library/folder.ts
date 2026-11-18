@@ -104,7 +104,7 @@ export class FolderLibrary implements Library {
 			await this.cache.put(key, book.paragraphs, book.toc);
 			text = { paragraphs: book.paragraphs, toc: book.toc };
 		}
-		const opened: BookRecord = { ...record, openedAt: now, updatedAt: now };
+		const opened: BookRecord = { ...record, openedAt: now, updatedAt: Math.max(now, record.updatedAt + 1) };
 		await this.save(opened);
 		return { record: opened, paragraphs: text.paragraphs, toc: text.toc };
 	}
@@ -189,7 +189,7 @@ export class FolderLibrary implements Library {
 		let record: BookRecord;
 		if (existing) {
 			// книга уже известна: возможно, файл переименовали или переложили
-			record = { ...existing, ...where, openedAt: now, updatedAt: now };
+			record = { ...existing, ...where, openedAt: now, updatedAt: Math.max(now, existing.updatedAt + 1) };
 		} else {
 			const wordCount = buildWords(text.paragraphs).words.length;
 			if (!wordCount) throw new Error("в файле не нашлось текста");
@@ -215,9 +215,16 @@ export class FolderLibrary implements Library {
 				if (existing.size === bytes.length && sameBytes(await readBytes(existing), bytes)) return { name, created: false };
 				continue;
 			}
-			const w = await (await this.dir.getFileHandle(name, { create: true })).createWritable();
-			await w.write(bytes as BufferSource);
-			await w.close();
+			const handle = await this.dir.getFileHandle(name, { create: true });
+			try {
+				const w = await handle.createWritable();
+				await w.write(bytes as BufferSource);
+				await w.close();
+			} catch (e) {
+				// не оставляем пустой файл в папке пользователя
+				await this.dir.removeEntry(name).catch(() => {});
+				throw e;
+			}
 			return { name, created: true };
 		}
 	}

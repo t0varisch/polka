@@ -24,7 +24,12 @@ export async function folderStateOf(handle: FileSystemDirectoryHandle | null, su
 	if (!supported) return "unsupported";
 	if (!handle) return "none";
 	if (typeof handle.queryPermission !== "function") return "granted";
-	return (await handle.queryPermission({ mode: "readwrite" })) === "granted" ? "granted" : "needs-permission";
+	try {
+		return (await handle.queryPermission({ mode: "readwrite" })) === "granted" ? "granted" : "needs-permission";
+	} catch {
+		// дескриптор протух или браузер отказал: просим разрешение заново, приложение должно открыться
+		return "needs-permission";
+	}
 }
 
 /** Выбор библиотеки при запуске: папка, если она выбрана и доступна, иначе браузер. */

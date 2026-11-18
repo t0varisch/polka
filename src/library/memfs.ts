@@ -21,6 +21,8 @@ function readBlob(b: Blob): Promise<Uint8Array> {
 /** Общий счётчик чтений содержимого файлов (getFile().arrayBuffer()). */
 export interface MemStats {
 	contentReads: number;
+	/** Сколько следующих записей (write) должны упасть с ошибкой. */
+	failWrites: number;
 }
 
 export class MemFileHandle {
@@ -50,6 +52,10 @@ export class MemFileHandle {
 		const chunks: Uint8Array[] = [];
 		return {
 			write: async (data) => {
+				if (this.dir.stats.failWrites > 0) {
+					this.dir.stats.failWrites--;
+					throw new DOMException("запись не удалась", "NoModificationAllowedError");
+				}
 				if (typeof data === "string") chunks.push(new TextEncoder().encode(data));
 				else if (data instanceof Blob) chunks.push(await readBlob(data));
 				else if (ArrayBuffer.isView(data)) chunks.push(new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)));
@@ -77,7 +83,7 @@ export class MemDirHandle {
 
 	constructor(
 		readonly name: string,
-		readonly stats: MemStats = { contentReads: 0 },
+		readonly stats: MemStats = { contentReads: 0, failWrites: 0 },
 		clock: { t: number } = { t: 1_700_000_000_000 },
 	) {
 		this.clock = clock;

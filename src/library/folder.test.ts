@@ -58,6 +58,9 @@ describe("FolderLibrary", () => {
 	it("переименованный файл: list не находит, open по f: находит запись по id", async () => {
 		const { fs, lib } = setup();
 		const { record } = await lib.open("f:Бета.txt");
+		const position = { ...record.position, word: 5, para: 1 };
+		const bookmarks = [{ id: "b1", word: 3, snippet: "метка", createdAt: 1 }];
+		await lib.save({ ...record, position, bookmarks, updatedAt: record.updatedAt + 10 });
 		fs.rename("Бета.txt", "Новая.txt");
 		const items = await lib.list();
 		expect(items.find((i) => i.fileName === "Новая.txt")?.record).toBeNull();
@@ -66,6 +69,10 @@ describe("FolderLibrary", () => {
 		expect(reopened.record.id).toBe(record.id);
 		expect(progress(fs).books[record.id].file).toBe("Новая.txt");
 		expect(Object.keys(progress(fs).books).length).toBe(1);
+		expect(reopened.record.position).toEqual(position);
+		expect(reopened.record.bookmarks).toEqual(bookmarks);
+		expect(progress(fs).books[record.id].position).toEqual(position);
+		expect(progress(fs).books[record.id].bookmarks).toEqual(bookmarks);
 	});
 
 	it("save двух книг подряд без ожидания — обе в файле", async () => {
@@ -93,6 +100,57 @@ describe("FolderLibrary", () => {
 		expect(fs.text("a_b_c.txt")).toBe("Вставленный текст для проверки.");
 		expect(progress(fs).books[id].file).toBe("a_b_c.txt");
 	});
+
+	function* listAll(d: MemDirHandle, prefix: string): Generator<string> {
+		for (const [n, f] of [...d.files].sort()) yield `${prefix}${n}:${new TextDecoder().decode(f.bytes)}`;
+		for (const [n, sub] of [...d.dirs].sort()) yield* listAll(sub, `${prefix}${n}/`);
+	}
+	const snapshot = (fs: MemDirHandle) => JSON.stringify([...listAll(fs, "")]);
+	const EMPTY = "   \n\n  ";
+
+	it("addFiles: файл без текста — отказ, папка как была", async () => {
+		const { fs, lib } = setup();
+		const before = snapshot(fs);
+		await expect(lib.addFiles([new File([EMPTY], "Пусто.txt")])).rejects.toThrow();
+		expect(snapshot(fs)).toBe(before);
+	});
+
+	it("addFiles: отказ при занятом имени — старый файл цел, «(2)» не остаётся", async () => {
+		const { fs, lib } = setup();
+		await expect(lib.addFiles([new File([EMPTY], "Альфа.txt")])).rejects.toThrow();
+		expect(fs.text("Альфа.txt")).toBe(BOOK(1));
+		expect(fs.text("Альфа (2).txt")).toBeNull();
+	});
+
+	it("addFiles: отказ при таком же файле в папке — файл не удаляется", async () => {
+		const { fs, lib } = setup();
+		fs.put("Пусто.txt", EMPTY);
+		await expect(lib.addFiles([new File([EMPTY], "Пусто.txt")])).rejects.toThrow();
+		expect(fs.text("Пусто.txt")).toBe(EMPTY);
+		expect(fs.text("Пусто (2).txt")).toBeNull();
+	});
+
+	it("addText: текст без слов — отказ, .txt не остаётся", async () => {
+		const { fs, lib } = setup();
+		await expect(lib.addText("Пустая", EMPTY)).rejects.toThrow();
+		expect(fs.text("Пустая.txt")).toBeNull();
+	});
+
+	it("сбой записи нового файла не оставляет пустой файл", async () => {
+		const { fs, lib } = setup();
+		fs.stats.failWrites = 1;
+		await expect(lib.addFiles([new File([BOOK(7)], "Новая.txt")])).rejects.toThrow();
+		expect(fs.text("Новая.txt")).toBeNull();
+	});
+
+	it("save: упавшая запись отклоняется, следующая проходит", async () => {
+		const { fs, lib } = setup();
+		const rec = (await lib.open("f:Альфа.txt")).record;
+		fs.stats.failWrites = 1;
+		await expect(lib.save({ ...rec, updatedAt: rec.updatedAt + 10 })).rejects.toThrow();
+		await lib.save({ ...rec, updatedAt: rec.updatedAt + 20 });
+		expect(progress(fs).books[rec.id].updatedAt).toBe(rec.updatedAt + 20);
+	});
 });
 
 describe("folderStateOf", () => {
@@ -105,5 +163,7 @@ describe("folderStateOf", () => {
 		expect(await folderStateOf(h("granted"), true)).toBe("granted");
 		expect(await folderStateOf(h("prompt"), true)).toBe("needs-permission");
 		expect(await folderStateOf(h("denied"), true)).toBe("needs-permission");
+		const broken = { name: "x", queryPermission: () => Promise.reject(new Error("отказ")) } as unknown as FileSystemDirectoryHandle;
+		expect(await folderStateOf(broken, true)).toBe("needs-permission");
 	});
 });
