@@ -1,0 +1,166 @@
+/* Режим «Печать»: лента, строка цифр, невидимое поле ввода */
+.mode-typing {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+	overflow: hidden;
+}
+.mode-typing .stage {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	padding-bottom: 8dvh;
+	cursor: text;
+	overflow: hidden;
+}
+.mode-typing .tape-wrap {
+	position: relative;
+	height: calc(var(--type-size, 34px) * 2.2);
+	flex: none;
+	overflow: hidden;
+	-webkit-mask-image: linear-gradient(to right, transparent 0, #000 6%, #000 94%, transparent 100%);
+	mask-image: linear-gradient(to right, transparent 0, #000 6%, #000 94%, transparent 100%);
+}
+.mode-typing .guide {
+	position: absolute;
+	left: 0;
+	right: 0;
+	height: 1px;
+	background: var(--line);
+}
+.mode-typing .guide.top {
+	top: 0;
+}
+.mode-typing .guide.bottom {
+	bottom: 0;
+}
+.mode-typing .guide i {
+	position: absolute;
+	left: var(--anchor, 30%);
+	width: 2px;
+	margin-left: -1px;
+	height: calc(var(--type-size, 34px) * 0.3);
+	background: var(--line);
+}
+.mode-typing .guide.top i {
+	top: 0;
+}
+.mode-typing .guide.bottom i {
+	bottom: 0;
+}
+.mode-typing:not(.focused) .tape-wrap .guide i {
+	background: var(--muted);
+}
+.mode-typing .tape {
+	position: absolute;
+	left: 0;
+	top: 50%;
+	margin-top: -0.65em;
+	width: max-content;
+	white-space: pre;
+	font-family: var(--word-font);
+	font-size: var(--type-size, 34px);
+	line-height: 1.3;
+	transition: transform 0.07s linear;
+	will-change: transform;
+}
+.mode-typing.no-anim .tape {
+	transition: none;
+}
+.mode-typing .tape span.done {
+	color: var(--muted);
+	opacity: 0.5;
+}
+.mode-typing .tape span.skip {
+	opacity: 0.35;
+}
+.mode-typing .tape span.para {
+	color: var(--muted);
+	padding: 0 0.35em;
+}
+.mode-typing .tape span.cur {
+	color: var(--fg);
+	opacity: 1;
+	background: var(--hl);
+	box-shadow: inset 0 -0.12em 0 var(--accent);
+	border-radius: 2px;
+}
+.mode-typing:not(.focused) .tape span.cur {
+	box-shadow: inset 0 -0.12em 0 var(--muted);
+}
+.mode-typing .tape span.err {
+	animation: typing-err 0.22s ease-out;
+}
+@keyframes typing-err {
+	0% {
+		background: var(--accent);
+		color: var(--on-accent);
+	}
+	100% {
+		background: var(--hl);
+	}
+}
+.mode-typing .type-hint {
+	min-height: 22px;
+	margin: 14px 16px 0;
+	text-align: center;
+	font-size: 15px;
+	color: var(--accent);
+}
+.mode-typing .stats {
+	display: flex;
+	justify-content: center;
+	gap: clamp(16px, 6vw, 48px);
+	margin-top: 18px;
+	font-variant-numeric: tabular-nums;
+}
+.mode-typing .stat {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	min-width: 72px;
+}
+.mode-typing .stat b {
+	font-size: 28px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+.mode-typing .stat small {
+	color: var(--muted);
+	font-size: 13px;
+}
+.mode-typing .type-meta {
+	margin: 10px 16px 0;
+	text-align: center;
+	font-size: 13px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+/* Поле ввода спрятано, но остаётся фокусируемым (16px — чтобы iPhone не увеличивал страницу) */
+.mode-typing .ghost {
+	position: fixed;
+	left: 0;
+	top: 0;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	border: 0;
+	padding: 0;
+	resize: none;
+	font-size: 16px;
+	pointer-events: none;
+}
+@media (max-width: 767px) {
+	/* Экранная клавиатура закрывает низ: строка и цифры наверху */
+	.mode-typing .stage {
+		justify-content: flex-start;
+		padding-top: 7dvh;
+		padding-bottom: 0;
+	}
+	.mode-typing .stat b {
+		font-size: 22px;
+	}
+}
