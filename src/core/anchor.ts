@@ -19,24 +19,14 @@ function lastAtMost(a: ArrayLike<number>, x: number): number {
 	return ans;
 }
 
-/**
- * Абзац, в котором лежит слово. У пустых абзацев начало общее со следующим — берётся последний (непустой);
- * исключение — хвост книги, где пустые абзацы прижаты к последнему слову: там берётся первый из них.
- */
+/** Абзац, в котором лежит слово: последний с началом ≤ word среди тех, где есть слова. */
 export function paraOfWord(stream: WordStream, word: number): number {
 	const starts = stream.paraStarts;
 	if (!starts.length) return 0;
-	const p = lastAtMost(starts, word);
-	if (starts[p] < stream.words.length - 1) return p;
-	const v = starts[p];
-	let lo = 0;
-	let hi = p;
-	while (lo < hi) {
-		const mid = (lo + hi) >> 1;
-		if (starts[mid] >= v) hi = mid;
-		else lo = mid + 1;
-	}
-	return lo;
+	let p = lastAtMost(starts, word);
+	// Пустые абзацы указывают на соседнее слово (в хвосте книги — на последнее): пропускаем их
+	while (p > 0 && stream.paraLens[p] === 0) p--;
+	return p;
 }
 
 /** Первые n слов с позиции word через пробел. */

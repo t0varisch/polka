@@ -110,6 +110,15 @@ describe("resolvePosition", () => {
 		expect(resolvePosition(s1, pos, 200)).toBe(38);
 	});
 
+	it("paraOfWord: хвост и пустые абзацы", () => {
+		const a = buildWords(["a b c", ""]);
+		expect(paraOfWord(a, 2)).toBe(0);
+		const b = buildWords(["a b", "", "c"]);
+		expect(paraOfWord(b, 2)).toBe(2);
+		const c = buildWords(["a b", "", "", "c d", "", ""]);
+		expect([0, 1, 2, 3].map((w) => paraOfWord(c, w))).toEqual([0, 0, 3, 3]);
+	});
+
 	it("paraOfWord, snippetAt, makePosition", () => {
 		const s = buildWords(["a b", "", "c d e"]);
 		expect(paraOfWord(s, 0)).toBe(0);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTypingText, isRequired, layoutHint, matches, nextRequired, normalizeParagraph, TypingStats } from "./typing";
+import { buildTypingText, isRequired, layoutHint, matches, nextRequired, normalizeParagraph, normalizeWithMap, TypingStats } from "./typing";
 
 const ALL = { caseSensitive: true, punctuation: true };
 
@@ -64,5 +64,18 @@ describe("скорость", () => {
 		expect(s.cpm).toBe(320); // 32 знака за 6 с
 		s.hit(false, (t += 200));
 		expect(s.accuracy).toBeCloseTo(97);
+	});
+});
+
+describe("скорость нормализации", () => {
+	it("миллион символов — быстрее 1500 мс", () => {
+		const para = "«Привет», — сказал он… тут и  там ".repeat(3).slice(0, 100).padEnd(100, "я");
+		const paras = Array.from({ length: 10000 }, () => para);
+		const t0 = performance.now();
+		const tt = buildTypingText(paras);
+		for (const p of paras) normalizeWithMap(p);
+		const ms = performance.now() - t0;
+		expect(tt.text.length).toBeGreaterThan(900000);
+		expect(ms).toBeLessThan(1500);
 	});
 });

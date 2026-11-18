@@ -25,6 +25,18 @@ const REPLACE: [RegExp, string][] = [
 	[/[­​-‍﻿]/g, ""],
 ];
 
+/** Замена для одного символа по таблице REPLACE; считается один раз на символ. */
+const REP_CACHE = new Map<string, string>();
+function replaceChar(ch: string): string {
+	let rep = REP_CACHE.get(ch);
+	if (rep === undefined) {
+		rep = ch;
+		for (const [re, to] of REPLACE) rep = rep.replace(re, to);
+		REP_CACHE.set(ch, rep);
+	}
+	return rep;
+}
+
 /**
  * Нормализация абзаца вместе с картой символов: map[i] — индекс в нормализованной строке,
  * куда попал символ i исходной (для p.length — длина результата). Удалённые символы
@@ -32,18 +44,24 @@ const REPLACE: [RegExp, string][] = [
  */
 export function normalizeWithMap(p: string): { text: string; map: Int32Array } {
 	const map = new Int32Array(p.length + 1);
-	let out = "";
+	const parts: string[] = [];
+	let len = 0;
+	let lastSpace = false;
 	for (let i = 0; i < p.length; i++) {
-		map[i] = out.length;
-		let rep = p[i];
-		for (const [re, to] of REPLACE) rep = rep.replace(re, to);
-		if (rep === " " && out.endsWith(" ")) continue; // сдвоенные пробелы схлопываются
-		out += rep;
+		map[i] = len;
+		const rep = replaceChar(p[i]);
+		if (rep === " " && lastSpace) continue; // сдвоенные пробелы схлопываются
+		if (rep) {
+			parts.push(rep);
+			len += rep.length;
+			lastSpace = rep[rep.length - 1] === " ";
+		}
 	}
+	const out = parts.join("");
 	// trim() как раньше: срезанные с краёв символы сдвигают карту
 	const lead = out.length - out.trimStart().length;
 	const text = out.trim();
-	map[p.length] = out.length;
+	map[p.length] = len;
 	for (let i = 0; i <= p.length; i++) map[i] = Math.min(Math.max(map[i] - lead, 0), text.length);
 	return { text, map };
 }

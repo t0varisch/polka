@@ -17,6 +17,8 @@ export interface WordStream {
 	words: Word[];
 	/** Индекс первого слова каждого абзаца. */
 	paraStarts: number[];
+	/** Сколько слов в каждом абзаце (у пустых — 0; paraStarts у них указывает на соседнее слово). */
+	paraLens: number[];
 	/** Индексы начал предложений, по возрастанию. */
 	sentenceStarts: number[];
 }
@@ -91,6 +93,7 @@ const LEVEL_FACTOR: Record<PauseLevel, number> = { 0: 0, 1: 1, 2: 2, 3: 3 };
 export function buildWords(paragraphs: string[], level: PauseLevel = 2): WordStream {
 	const words: Word[] = [];
 	const paraStarts: number[] = [];
+	const paraLens: number[] = [];
 	const sentenceStarts: number[] = [];
 	const k = LEVEL_FACTOR[level];
 	const paraMult = level === 0 ? 1 : 1 + 0.4 * k; // при уровне 2 — 1.8, как в Speeedy
@@ -98,6 +101,7 @@ export function buildWords(paragraphs: string[], level: PauseLevel = 2): WordStr
 	for (const p of paragraphs) {
 		paraStarts.push(words.length);
 		const tokens = splitParagraph(p);
+		paraLens.push(tokens.length);
 		for (let i = 0; i < tokens.length; i++) {
 			const text = tokens[i];
 			const pw = punctWeight(text);
@@ -119,7 +123,7 @@ export function buildWords(paragraphs: string[], level: PauseLevel = 2): WordStr
 	for (let i = 0; i < paraStarts.length; i++) {
 		if (paraStarts[i] >= words.length) paraStarts[i] = Math.max(0, words.length - 1);
 	}
-	return { words, paraStarts, sentenceStarts: dedupe(sentenceStarts) };
+	return { words, paraStarts, paraLens, sentenceStarts: dedupe(sentenceStarts) };
 }
 
 function dedupe(a: number[]): number[] {
