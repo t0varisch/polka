@@ -32,7 +32,7 @@ let dbp: Promise<IDBPDatabase<Schema>> | null = null;
 
 function db(): Promise<IDBPDatabase<Schema>> {
 	if (!dbp) {
-		dbp = openDB<Schema>("polka", 1, {
+		dbp = openDB<Schema>("polka-old", 1, {
 			upgrade(d) {
 				d.createObjectStore("books", { keyPath: "id" });
 				d.createObjectStore("texts", { keyPath: "id" });
