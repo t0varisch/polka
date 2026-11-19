@@ -248,17 +248,20 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		turn(dir as 1 | -1);
 	};
 
+	let relayoutFrame = 0;
 	let lastWheel = 0;
 	viewport.addEventListener(
 		"wheel",
 		(e) => {
 			if (e.ctrlKey) return;
 			e.preventDefault();
+			// время обновляем на каждое событие: инерция тачпада тянется дольше паузы, и один жест — одна страница
 			const now = performance.now();
-			if (now - lastWheel < WHEEL_GAP_MS) return;
+			const quiet = now - lastWheel >= WHEEL_GAP_MS;
+			lastWheel = now;
+			if (!quiet) return;
 			const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
 			if (d === 0) return;
-			lastWheel = now;
 			turn(d > 0 ? 1 : -1);
 		},
 		{ passive: false },
@@ -346,10 +349,17 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 			];
 		},
 		applySettings() {
-			void relayout();
+			// ползунок шлёт десятки событий в секунду: перекладываем не чаще кадра, берём последнее значение
+			if (typeof requestAnimationFrame !== "function") return void relayout();
+			if (relayoutFrame) return;
+			relayoutFrame = requestAnimationFrame(() => {
+				relayoutFrame = 0;
+				if (!disposed) void relayout();
+			});
 		},
 		destroy() {
 			disposed = true;
+			if (relayoutFrame && typeof cancelAnimationFrame === "function") cancelAnimationFrame(relayoutFrame);
 			clearTimeout(hereTimer);
 			observer?.disconnect();
 			window.removeEventListener("resize", onResize);

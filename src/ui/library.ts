@@ -147,14 +147,29 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 	let renderSeq = 0;
 	let disposed = false;
 
+	/** Понятное сообщение: свои тексты (по-русски) показываем как есть, английский текст браузера — нет. */
+	function readable(e: unknown, fallback: string): string {
+		const m = e instanceof Error ? e.message : "";
+		return /[а-яё]/i.test(m) ? m : fallback;
+	}
+
 	async function render(): Promise<void> {
 		const seq = ++renderSeq;
+		let c: Awaited<ReturnType<typeof currentLibrary>>;
 		try {
-			const c = await currentLibrary();
+			c = await currentLibrary();
+		} catch {
+			if (disposed || seq !== renderSeq) return;
+			list.replaceChildren(h("p.empty", {}, "Не получилось открыть библиотеку"));
+			return;
+		}
+		if (disposed || seq !== renderSeq) return;
+		// панель с папкой — до списка: если папка недоступна, её всё равно можно сменить или отключить
+		cur = c;
+		top.replaceChildren(...buildTop(c));
+		try {
 			const items = await c.lib.list();
 			if (disposed || seq !== renderSeq) return;
-			cur = c;
-			top.replaceChildren(...buildTop(c));
 			list.replaceChildren();
 			if (items.length === 0) {
 				list.append(h("p.empty", {}, c.folder === "granted" ? "В папке пока нет книг. Положи туда файл или добавь книгу" : "Здесь пока пусто. Открой книгу — и начнём"));
@@ -163,9 +178,9 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 			for (const it of items) list.append(card(c.lib, it));
 		} catch (e) {
 			if (disposed || seq !== renderSeq) return;
-			const msg = e instanceof Error ? e.message : "не получилось прочитать список книг";
-			toast(`Не получилось открыть библиотеку: ${msg}`, 6000);
-			list.replaceChildren(h("p.empty", {}, `Не получилось открыть библиотеку: ${msg}`));
+			const msg = readable(e, c.lib.kind === "folder" ? `Не получилось прочитать папку «${c.folderName ?? c.lib.name}» — выбери её снова` : "Не получилось прочитать список книг");
+			toast(msg, 6000);
+			list.replaceChildren(h("p.empty", {}, msg));
 		}
 	}
 

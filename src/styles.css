@@ -181,10 +181,6 @@ a {
 	font-size: 30px;
 	letter-spacing: -0.02em;
 }
-.lib-head h1::after {
-	content: ".";
-	color: var(--accent);
-}
 .tagline {
 	margin: 2px 0 0;
 	color: var(--muted);

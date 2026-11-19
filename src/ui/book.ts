@@ -1,10 +1,10 @@
 // Экран книги: верхняя панель, переключатель режимов, место в книге, закладки, настройки, сохранение
-import { makePosition, resolvePosition, snippetAt } from "../core/anchor";
+import { makePosition, snippetAt } from "../core/anchor";
 import { buildWords, type WordStream } from "../core/words";
-import { currentLibrary } from "../library";
+import { currentLibrary, regrantFolder } from "../library";
 import type { Library } from "../library/types";
 import type { Settings } from "../settings";
-import type { Bookmark, Mode, OpenedBook } from "../types";
+import type { Bookmark, BookRecord, Mode, OpenedBook } from "../types";
 import { h, icon, iconButton, toast } from "./dom";
 import { buildChapters, chapterAt, openNav } from "./nav";
 import { type ModeFactory, type ModeHost, type ModeView } from "./modes/types";
@@ -12,6 +12,7 @@ import { pagesMode } from "./modes/pages";
 import { typingMode } from "./modes/typing";
 import { wordsMode } from "./modes/words";
 import { withProgress } from "./progress";
+import { resumeAt, stampUpdated, syncDecision } from "./resume";
 import { openSettings } from "./settings-sheet";
 
 export interface BookCtx {
@@ -44,33 +45,56 @@ function newId(): string {
 
 export async function openBook(root: HTMLElement, key: string, urlMode: Mode | null, ctx: BookCtx): Promise<() => void> {
 	let disposed = false;
-	const noop = () => {
+	let teardown: (() => void) | null = null;
+	const dispose = () => {
+		// сначала снимаем экран книги (он сам сохраняет место), потом закрываем маршрут
+		teardown?.();
 		disposed = true;
 	};
+	const gone = () => disposed || !ctx.alive();
 
 	// ---- открытие: строка прогресса и сторож зависания
-	const busy = h("div.busy", { "aria-live": "polite" });
-	const loading = h("div.book.loading", {}, h("button.secondary", { type: "button", onclick: () => ctx.goLibrary() }, "К библиотеке"), busy);
-	root.replaceChildren(loading);
+	async function begin(): Promise<void> {
+		const busy = h("div.busy", { "aria-live": "polite" });
+		const back = h("button.secondary", { type: "button", onclick: () => ctx.goLibrary() }, "К библиотеке");
+		root.replaceChildren(h("div.book.loading", {}, back, busy));
 
-	const { lib } = await currentLibrary();
-	if (disposed || !ctx.alive()) return noop;
-	let opened: OpenedBook;
-	try {
-		opened = await withProgress(busy, key.replace(/^f:/, ""), (p) => lib.open(key, p));
-	} catch (e) {
-		if (!disposed && ctx.alive()) busy.textContent = `Не получилось открыть: ${e instanceof Error ? e.message : "ошибка"}`;
-		return noop;
-	}
-	if (disposed || !ctx.alive()) return noop;
+		const { lib, folder, folderName } = await currentLibrary();
+		if (gone()) return;
+		// после перезапуска браузера доступ к папке нужно выдать заново, и только из нажатия
+		if (folder === "needs-permission") {
+			const again = h("button.primary", { type: "button" }, icon("folder", 20), `Открыть папку «${folderName ?? ""}»`);
+			again.addEventListener("click", async () => {
+				try {
+					if (!(await regrantFolder())) return toast("Доступ к папке не выдан");
+				} catch (e) {
+					return toast(e instanceof Error && /[а-яё]/i.test(e.message) ? e.message : "Не получилось открыть папку");
+				}
+				if (!gone()) await begin();
+			});
+			busy.textContent = `Книга лежит в папке «${folderName ?? ""}», а доступ к ней нужно выдать заново`;
+			busy.after(again);
+			return;
+		}
+		let opened: OpenedBook;
+		try {
+			opened = await withProgress(busy, key.replace(/^f:/, ""), (p) => lib.open(key, p));
+		} catch (e) {
+			if (!gone()) busy.textContent = `Не получилось открыть: ${e instanceof Error ? e.message : "ошибка"}`;
+			return;
+		}
+		if (gone()) return;
 
-	const stream: WordStream = buildWords(opened.paragraphs);
-	const total = stream.words.length;
-	if (total === 0) {
-		busy.textContent = "В книге не нашлось текста";
-		return noop;
+		const stream: WordStream = buildWords(opened.paragraphs);
+		if (stream.words.length === 0) {
+			busy.textContent = "В книге не нашлось текста";
+			return;
+		}
+		teardown = mountBook(root, lib, opened, stream, urlMode, ctx, () => disposed, (v) => (disposed = v));
 	}
-	return mountBook(root, lib, opened, stream, urlMode, ctx, () => disposed, (v) => (disposed = v));
+
+	await begin();
+	return dispose;
 }
 
 function mountBook(
@@ -100,7 +124,13 @@ function mountBook(
 	const sheetClosers: (() => void)[] = [];
 
 	// ---- сохранение: только изменения, не чаще раза в SAVE_EVERY_MS
-	let dirty = record.wordCount !== total;
+	// число слов в книге изменилось: возвращаемся по обрывку текста и сразу записываем найденное место
+	const resume = resumeAt(stream, record, mode);
+	let dirty = resume.changed;
+	if (resume.changed) {
+		record.position = resume.position;
+		record.bookmarks = resume.bookmarks;
+	}
 	let changedAt = Date.now();
 	let lastSave = 0;
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -119,7 +149,7 @@ function mountBook(
 		dirty = false;
 		lastSave = Date.now();
 		record.wordCount = total;
-		record.updatedAt = changedAt;
+		record.updatedAt = stampUpdated(changedAt, record.updatedAt);
 		const snapshot = structuredClone(record);
 		saving = saving
 			.then(() => lib.save(snapshot))
@@ -150,7 +180,11 @@ function mountBook(
 	const buttons = new Map<Mode, HTMLButtonElement>();
 	for (const m of MODES) {
 		const b = h("button.mode-btn", { type: "button", "aria-label": m.label, "data-m": m.mode }, icon(m.ico, 18), h("span", {}, m.label));
-		b.addEventListener("click", () => void switchMode(m.mode));
+		b.addEventListener("click", () => {
+			void switchMode(m.mode);
+			// иначе пробел потом «нажмёт» эту кнопку вместо перелистывания
+			b.blur();
+		});
 		buttons.set(m.mode, b);
 		switcher.append(b);
 	}
@@ -190,7 +224,7 @@ function mountBook(
 
 	// ---- интерфейс для режимов
 	function report(word: number): void {
-		if (isDisposed()) return;
+		if (isDisposed() || adopting) return;
 		const w = Math.min(Math.max(0, word), total - 1);
 		showWord(w);
 		if (w !== record.position.word || mode !== record.position.mode) {
@@ -248,12 +282,15 @@ function mountBook(
 		settings,
 		saveSettings: () => ctx.saveSettings(),
 		report,
-		flush,
+		flush: () => {
+			if (!isDisposed()) flush();
+		},
 		addBookmark,
 		openNav: openNavSheet,
 		openSettings: openSettingsSheet,
 		goLibrary: () => ctx.goLibrary(),
 		updateTyping(t) {
+			if (isDisposed() || adopting) return;
 			record.typing = t;
 			touch();
 			scheduleSave();
@@ -346,15 +383,71 @@ function mountBook(
 		if (e.key === "Escape") ctx.goLibrary();
 		else if (e.key === "b" || e.key === "и") addBookmark();
 	};
-	const onHide = () => {
+	// ---- вкладка вернулась на экран: место могли сдвинуть в другом окне
+	let checking = false;
+	/** Идёт подмена записи на чужую: режим не должен записывать своё поверх. */
+	let adopting = false;
+	async function checkStored(): Promise<void> {
+		if (checking || isDisposed() || starting || switching || dirty) return;
+		checking = true;
+		try {
+			await saving;
+			const stored = await lib.record(record.id);
+			if (isDisposed() || starting || switching) return;
+			if (syncDecision(stored, { updatedAt: record.updatedAt, dirty }) !== "adopt" || !stored) return;
+			const w = resumeAt(stream, stored, mode).start;
+			switching = true;
+			adopting = true;
+			try {
+				if (mode === "typing" && view) {
+					// печать читает итоги при запуске: перезапускаем режим на чужих итогах
+					view.pause();
+					view.destroy();
+					view = null;
+					body.replaceChildren();
+					adopt(stored);
+					await startMode(mode, w);
+				} else {
+					adopt(stored);
+					view?.seek(w);
+				}
+			} finally {
+				adopting = false;
+				switching = false;
+				runPending();
+			}
+			showWord(w);
+			toast("Место обновлено");
+		} catch {
+			// проверка необязательна: не вышло — остаёмся на своём месте
+		} finally {
+			checking = false;
+		}
+	}
+
+	function adopt(stored: BookRecord): void {
+		record.position = stored.position;
+		record.bookmarks = stored.bookmarks;
+		record.typing = stored.typing;
+		record.updatedAt = stored.updatedAt;
+		record.openedAt = stored.openedAt;
+		dirty = false;
+		clearTimeout(saveTimer);
+		saveTimer = undefined;
+	}
+
+	const onVisibility = () => {
 		if (document.visibilityState === "hidden") flush();
+		else void checkStored();
 	};
+	const onFocus = () => void checkStored();
 	document.addEventListener("keydown", onKey);
-	document.addEventListener("visibilitychange", onHide);
+	document.addEventListener("visibilitychange", onVisibility);
+	window.addEventListener("focus", onFocus);
 	window.addEventListener("pagehide", flush);
 
 	// ---- запуск
-	const start = resolvePosition(stream, record.position, record.wordCount);
+	const start = resume.start;
 	showMode();
 	showWord(start);
 	setUrl();
@@ -368,16 +461,18 @@ function mountBook(
 
 	return () => {
 		if (isDisposed()) return;
+		startSeq++;
+		// сначала закрываем режим (печать при этом сообщает итоги), потом одно сохранение
+		view?.destroy();
+		view = null;
 		flush();
 		setDisposed(true);
 		clearTimeout(saveTimer);
 		clearTimeout(flashTimer);
 		for (const close of sheetClosers) close();
-		startSeq++;
-		view?.destroy();
-		view = null;
 		document.removeEventListener("keydown", onKey);
-		document.removeEventListener("visibilitychange", onHide);
+		document.removeEventListener("visibilitychange", onVisibility);
+		window.removeEventListener("focus", onFocus);
 		window.removeEventListener("pagehide", flush);
 	};
 }
