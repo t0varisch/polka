@@ -3,7 +3,7 @@ import { parseFile, readBytes } from "../parsers";
 import type { BookRecord, OpenedBook, ParsedBook, TocEntry } from "../types";
 import { getText, putText } from "./db";
 import { bookId } from "./hash";
-import { type ProgressFile, mergeProgress, newRecord, parseProgress } from "./record";
+import { type ProgressFile, mergeProgress, newRecord, parseProgress, serializeProgress } from "./record";
 import type { Library, ParseProgress, ShelfItem } from "./types";
 
 export const SERVICE_DIR = ".polka";
@@ -62,19 +62,38 @@ export class FolderLibrary implements Library {
 
 	async list(): Promise<ShelfItem[]> {
 		const files: FoundFile[] = [];
-		await this.walk(this.dir, "", 0, files);
+		try {
+			await this.walk(this.dir, "", 0, files, true);
+		} catch (e) {
+			if (isNotFound(e)) throw new Error(`Папка «${this.name}» недоступна — выбери её снова`);
+			throw e;
+		}
 		const records = Object.values((await this.readProgress()).books);
-		const byPath = new Map<string, BookRecord>();
-		for (const r of records) if (r.file) byPath.set(r.file, r);
+		const same = (r: BookRecord, f: FoundFile) => r.size === f.size && r.mtime === f.mtime;
 		const claimed = new Set<string>();
 		const items: ShelfItem[] = [];
+		const stale = (a: BookRecord, b: BookRecord) => b.openedAt - a.openedAt;
+		// сначала файлы, у которых путь, размер и дата совпали: так замена файла по тому же пути не отнимает запись у настоящего
+		const exact = new Map<string, BookRecord>();
 		for (const f of files) {
-			let rec = byPath.get(f.path);
-			// файл переложили в другую папку: то же имя, размер и дата
-			if (!rec) rec = records.find((r) => r.file && !claimed.has(r.id) && baseName(r.file) === f.name && r.size === f.size && r.mtime === f.mtime);
-			if (rec && claimed.has(rec.id)) rec = undefined;
-			if (rec) claimed.add(rec.id);
-			items.push({ key: rec ? rec.id : "f:" + f.path, record: rec ?? null, fileName: f.name, path: f.path });
+			const r = records.filter((x) => x.file === f.path && same(x, f) && !claimed.has(x.id)).sort(stale)[0];
+			if (r) {
+				claimed.add(r.id);
+				exact.set(f.path, r);
+			}
+		}
+		for (const f of files) {
+			let rec = exact.get(f.path);
+			let key = rec ? rec.id : "";
+			if (!rec) {
+				// тот же путь, но файл изменился — открывать нужно через хеш, старый текст из кэша не годится
+				rec = records.filter((x) => x.file === f.path && !claimed.has(x.id)).sort(stale)[0];
+				// файл переложили в другую папку: то же имя, размер и дата
+				if (!rec) rec = records.find((r) => r.file && !claimed.has(r.id) && baseName(r.file) === f.name && same(r, f));
+				if (rec) claimed.add(rec.id);
+				key = "f:" + f.path;
+			}
+			items.push({ key, record: rec ?? null, fileName: f.name, path: f.path });
 		}
 		items.sort((a, b) => {
 			if (a.record && b.record) return b.record.openedAt - a.record.openedAt;
@@ -83,6 +102,11 @@ export class FolderLibrary implements Library {
 			return (a.fileName ?? "").localeCompare(b.fileName ?? "", "ru");
 		});
 		return items;
+	}
+
+	/** Запись книги из progress.json; null — записи нет. */
+	async record(id: string): Promise<BookRecord | null> {
+		return (await this.readProgress()).books[id] ?? null;
 	}
 
 	async open(key: string, p?: ParseProgress): Promise<OpenedBook> {
@@ -110,10 +134,12 @@ export class FolderLibrary implements Library {
 	}
 
 	save(record: BookRecord): Promise<void> {
-		const run = this.chain.then(async () => {
-			const merged = mergeProgress(await this.readProgress(), record);
-			await this.writeProgress(merged);
-		});
+		const run = this.chain.then(() =>
+			exclusive(async () => {
+				const merged = mergeProgress(await this.readProgress(), record);
+				await this.writeProgress(merged);
+			}),
+		);
 		// сбой одной записи не должен ломать очередь
 		this.chain = run.catch(() => {});
 		return run;
@@ -147,17 +173,25 @@ export class FolderLibrary implements Library {
 		}
 	}
 
-	/** Обход папки и подпапок; служебные папки и папки на точку пропускаем. */
-	private async walk(dir: FileSystemDirectoryHandle, prefix: string, depth: number, out: FoundFile[]): Promise<void> {
-		for await (const h of dir.values()) {
-			if (h.kind === "directory") {
-				if (h.name.startsWith(".") || depth >= MAX_DEPTH) continue;
-				await this.walk(h as FileSystemDirectoryHandle, prefix + h.name + "/", depth + 1, out);
-			} else if (BOOK_FILE.test(h.name)) {
-				// getFile не читает содержимое: размер и дата доступны сразу
-				const f = await (h as FileSystemFileHandle).getFile();
-				out.push({ path: prefix + h.name, name: h.name, size: f.size, mtime: f.lastModified });
+	/** Обход папки и подпапок; служебные папки и папки на точку пропускаем. Нечитаемая запись пропускается, ошибка корня — нет. */
+	private async walk(dir: FileSystemDirectoryHandle, prefix: string, depth: number, out: FoundFile[], root = false): Promise<void> {
+		try {
+			for await (const h of dir.values()) {
+				try {
+					if (h.kind === "directory") {
+						if (h.name.startsWith(".") || depth >= MAX_DEPTH) continue;
+						await this.walk(h as FileSystemDirectoryHandle, prefix + h.name + "/", depth + 1, out);
+					} else if (BOOK_FILE.test(h.name)) {
+						// getFile не читает содержимое: размер и дата доступны сразу
+						const f = await (h as FileSystemFileHandle).getFile();
+						out.push({ path: prefix + h.name, name: h.name, size: f.size, mtime: f.lastModified });
+					}
+				} catch {
+					// один нечитаемый файл или папка не должны ронять всю полку
+				}
 			}
+		} catch (e) {
+			if (root) throw e;
 		}
 	}
 
@@ -229,21 +263,30 @@ export class FolderLibrary implements Library {
 		}
 	}
 
+	/** Нет файла — пустой прогресс. Файл есть, но не читается — ProgressError, и писать поверх него нельзя. */
 	private async readProgress(): Promise<ProgressFile> {
+		let text: string;
 		try {
 			const sub = await this.dir.getDirectoryHandle(SERVICE_DIR);
 			const file = await (await sub.getFileHandle(PROGRESS_FILE)).getFile();
-			return parseProgress(new TextDecoder().decode(await readBytes(file)));
+			text = new TextDecoder().decode(await readBytes(file));
 		} catch (e) {
-			if (isNotFound(e)) return parseProgress("");
+			if (isNotFound(e)) return { version: 1, books: {} };
 			throw e;
 		}
+		return parseProgress(text);
 	}
 
 	private async writeProgress(data: ProgressFile): Promise<void> {
 		const sub = await this.dir.getDirectoryHandle(SERVICE_DIR, { create: true });
 		const w = await (await sub.getFileHandle(PROGRESS_FILE, { create: true })).createWritable();
-		await w.write(JSON.stringify(data, null, "\t"));
+		await w.write(serializeProgress(data));
 		await w.close();
 	}
+}
+
+/** Чтение-слияние-запись progress.json: между вкладками — через Web Locks, где они есть. */
+function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+	const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+	return locks ? locks.request("polka-progress", fn) : fn();
 }

@@ -3,7 +3,7 @@ import { parseFile, parseText } from "../parsers";
 import type { BookRecord, OpenedBook, ParsedBook } from "../types";
 import { db, getText, putText } from "./db";
 import { bookId } from "./hash";
-import { newRecord } from "./record";
+import { newRecord, shouldReplace } from "./record";
 import type { Library, ParseProgress, ShelfItem } from "./types";
 
 /** Библиотека в браузере: записи и тексты в IndexedDB. Ключ книги — её id. */
@@ -27,8 +27,16 @@ export class BrowserLibrary implements Library {
 		return { record: opened, paragraphs: text.paragraphs, toc: text.toc };
 	}
 
+	/** Свежее побеждает: запись старее сохранённой не заменяет её. Чтение и запись — в одной транзакции. */
 	async save(record: BookRecord): Promise<void> {
-		await (await db()).put("books", record);
+		const tx = (await db()).transaction("books", "readwrite");
+		const old = await tx.store.get(record.id);
+		if (shouldReplace(old, record)) await tx.store.put(record);
+		await tx.done;
+	}
+
+	async record(id: string): Promise<BookRecord | null> {
+		return (await (await db()).get("books", id)) ?? null;
 	}
 
 	async addFiles(files: File[], p?: ParseProgress): Promise<string[]> {

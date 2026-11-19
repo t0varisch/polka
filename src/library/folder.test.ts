@@ -25,7 +25,11 @@ function setup(): { fs: MemDirHandle; lib: FolderLibrary } {
 	return { fs, lib: new FolderLibrary(asDirHandle(fs), memCache()) };
 }
 
-const progress = (fs: MemDirHandle) => parseProgress(fs.text(`${SERVICE_DIR}/${PROGRESS_FILE}`) ?? "");
+const PROGRESS_PATH = `${SERVICE_DIR}/${PROGRESS_FILE}`;
+const progress = (fs: MemDirHandle) => {
+	const t = fs.text(PROGRESS_PATH);
+	return t === null ? { version: 1 as const, books: {} } : parseProgress(t);
+};
 
 describe("FolderLibrary", () => {
 	it("list: 4 книги, содержимое не читается", async () => {
@@ -150,6 +154,98 @@ describe("FolderLibrary", () => {
 		await expect(lib.save({ ...rec, updatedAt: rec.updatedAt + 10 })).rejects.toThrow();
 		await lib.save({ ...rec, updatedAt: rec.updatedAt + 20 });
 		expect(progress(fs).books[rec.id].updatedAt).toBe(rec.updatedAt + 20);
+	});
+});
+
+describe("FolderLibrary: надёжность", () => {
+	const opened = async () => {
+		const { fs, lib } = setup();
+		const rec = (await lib.open("f:Альфа.txt")).record;
+		return { fs, lib, rec };
+	};
+
+	it("битый progress.json: read и save отказывают, файл не меняется", async () => {
+		const { fs, lib, rec } = await opened();
+		for (const bad of ["{ не json", '{"version":2,"books":{}}', "", "null", '{"version":1,"books":[]}']) {
+			fs.put(PROGRESS_PATH, bad);
+			await expect(lib.save({ ...rec, updatedAt: rec.updatedAt + 5 })).rejects.toThrow(/progress\.json/);
+			await expect(lib.list()).rejects.toThrow(/progress\.json/);
+			await expect(lib.open("f:Бета.txt")).rejects.toThrow(/progress\.json/);
+			expect(fs.text(PROGRESS_PATH)).toBe(bad);
+		}
+	});
+
+	it("запись с мусором внутри возвращается в файл как есть", async () => {
+		const { fs, lib, rec } = await opened();
+		const file = JSON.parse(fs.text(PROGRESS_PATH) as string);
+		file.books.broken = { id: "broken", title: 42, чужое: [1, 2] };
+		file.books.cut = "строка";
+		fs.put(PROGRESS_PATH, JSON.stringify(file));
+		await lib.save({ ...rec, updatedAt: rec.updatedAt + 5 });
+		const after = JSON.parse(fs.text(PROGRESS_PATH) as string);
+		expect(after.books.broken).toEqual({ id: "broken", title: 42, чужое: [1, 2] });
+		expect(after.books.cut).toBe("строка");
+		expect(after.books[rec.id].updatedAt).toBe(rec.updatedAt + 5);
+		expect((await lib.list()).filter((i) => i.record).length).toBe(1);
+	});
+
+	it("переложенный файл + пустой кэш: list даёт f:, open работает и обновляет file", async () => {
+		const fs = createMemFs();
+		fs.put("Альфа.txt", BOOK(1));
+		const lib = new FolderLibrary(asDirHandle(fs), memCache());
+		const rec = (await lib.open("f:Альфа.txt")).record;
+		// перенос в подпапку с сохранением даты изменения
+		const moved = fs.files.get("Альфа.txt")!;
+		fs.files.delete("Альфа.txt");
+		fs.put("кладовка/Альфа.txt", moved.bytes);
+		fs.dirs.get("кладовка")!.files.get("Альфа.txt")!.lastModified = moved.lastModified;
+		const fresh = new FolderLibrary(asDirHandle(fs), memCache());
+		const items = await fresh.list();
+		expect(items.length).toBe(1);
+		expect(items[0].key).toBe("f:кладовка/Альфа.txt");
+		expect(items[0].record?.id).toBe(rec.id);
+		const again = await fresh.open(items[0].key);
+		expect(again.record.id).toBe(rec.id);
+		expect(progress(fs).books[rec.id].file).toBe("кладовка/Альфа.txt");
+	});
+
+	it("тот же путь, но файл заменён: ключ f:, открытие перехеширует", async () => {
+		const fs = createMemFs();
+		fs.put("Альфа.txt", BOOK(1));
+		const lib = new FolderLibrary(asDirHandle(fs), memCache());
+		const rec = (await lib.open("f:Альфа.txt")).record;
+		expect((await lib.list())[0].key).toBe(rec.id);
+		fs.put("Альфа.txt", BOOK(1) + "\n\nДописанный абзац, из-за которого файл стал другим");
+		const items = await lib.list();
+		expect(items[0].key).toBe("f:Альфа.txt");
+		expect(items[0].record?.id).toBe(rec.id);
+		const next = await lib.open(items[0].key);
+		expect(next.record.id).not.toBe(rec.id);
+		expect(next.paragraphs.join(" ")).toContain("Дописанный");
+	});
+
+	it("нечитаемая подпапка не роняет список", async () => {
+		const { fs, lib } = setup();
+		const sub = fs.dirs.get("подпапка") as MemDirHandle;
+		sub.values = async function* () {
+			throw new Error("Failed to read");
+		};
+		const items = await lib.list();
+		expect(items.map((i) => i.fileName)).toEqual(["Альфа.txt", "Бета.txt", "Гамма.txt"]);
+	});
+
+	it("корневая папка исчезла: русское сообщение", async () => {
+		const { fs, lib } = setup();
+		fs.values = async function* () {
+			throw new DOMException("not found", "NotFoundError");
+		};
+		await expect(lib.list()).rejects.toThrow("Папка «Книги» недоступна — выбери её снова");
+	});
+
+	it("record(id) читает сохранённую запись", async () => {
+		const { lib, rec } = await opened();
+		expect((await lib.record(rec.id))?.id).toBe(rec.id);
+		expect(await lib.record("нет")).toBeNull();
 	});
 });
 

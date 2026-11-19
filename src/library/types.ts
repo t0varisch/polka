@@ -21,6 +21,8 @@ export interface Library {
 	list(): Promise<ShelfItem[]>;
 	open(key: string, p?: ParseProgress): Promise<OpenedBook>;
 	save(record: BookRecord): Promise<void>;
+	/** Сохранённая запись книги (только чтение); null — записи нет. */
+	record(id: string): Promise<BookRecord | null>;
 	/** Возвращает ключи книг. */
 	addFiles(files: File[], p?: ParseProgress): Promise<string[]>;
 	addText(title: string, text: string): Promise<string>;

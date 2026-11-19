@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BookRecord, ParsedBook } from "../types";
 import { bookId } from "./hash";
-import { mergeProgress, newRecord, parseProgress } from "./record";
+import { ProgressError, mergeProgress, newRecord, parseProgress, serializeProgress, shouldReplace } from "./record";
 
 function rec(id: string, updatedAt: number, title = id): BookRecord {
 	return {
@@ -42,10 +42,17 @@ describe("mergeProgress", () => {
 });
 
 describe("parseProgress", () => {
-	it("мусор — пустой файл", () => {
-		expect(parseProgress("мусор")).toEqual({ version: 1, books: {} });
-		expect(parseProgress('{"version":2,"books":{}}')).toEqual({ version: 1, books: {} });
-		expect(parseProgress("null")).toEqual({ version: 1, books: {} });
+	it("мусор и чужая версия — ProgressError, не пустой файл", () => {
+		for (const bad of ["мусор", '{"version":2,"books":{}}', "null", "", '{"version":1}']) {
+			expect(() => parseProgress(bad)).toThrow(ProgressError);
+		}
+	});
+	it("непонятная запись уходит в foreign и возвращается при записи", () => {
+		const f = { version: 1, books: { A: rec("A", 1), B: { id: "B", что: "то" } } };
+		const p = parseProgress(JSON.stringify(f));
+		expect(Object.keys(p.books)).toEqual(["A"]);
+		expect(p.foreign).toEqual({ B: { id: "B", что: "то" } });
+		expect(JSON.parse(serializeProgress(mergeProgress(p, rec("A", 5)))).books.B).toEqual({ id: "B", что: "то" });
 	});
 	it("верный файл читается", () => {
 		const f = { version: 1, books: { A: rec("A", 1) } };
@@ -81,5 +88,14 @@ describe("bookId", () => {
 	});
 	it("разные байты — разный id", async () => {
 		expect(await bookId(new Uint8Array([1]))).not.toBe(await bookId(new Uint8Array([2])));
+	});
+});
+
+describe("shouldReplace", () => {
+	it("свежее или равное заменяет, старое — нет", () => {
+		expect(shouldReplace(null, { updatedAt: 1 })).toBe(true);
+		expect(shouldReplace({ updatedAt: 5 }, { updatedAt: 5 })).toBe(true);
+		expect(shouldReplace({ updatedAt: 5 }, { updatedAt: 6 })).toBe(true);
+		expect(shouldReplace({ updatedAt: 6 }, { updatedAt: 5 })).toBe(false);
 	});
 });
