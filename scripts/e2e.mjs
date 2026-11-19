@@ -101,6 +101,41 @@ async function browserFlow(W, H, tag) {
 		step(w3 > w0 && (await onOpenPage(page)), `${tag} браузер: вперёд 3 страницы`, `${w0} -> ${w3}`);
 		await shot("2-pages-forward3");
 
+		// смена размера окна и размера текста: слово-якорь остаётся на открытой странице
+		const alt = W >= 800 ? [390, 844] : [W === 390 ? 1280 : 1100, 700];
+		await page.setViewportSize({ width: alt[0], height: alt[1] });
+		await page.waitForTimeout(900);
+		step((await dw(page)) === w3 && (await onOpenPage(page)), `${tag} браузер: смена окна на ${alt[0]}x${alt[1]}, слово на странице`, `${w3} -> ${await dw(page)}`);
+		await shot("2a-resized");
+		await page.setViewportSize({ width: W, height: H });
+		await page.waitForTimeout(900);
+		step((await dw(page)) === w3 && (await onOpenPage(page)), `${tag} браузер: окно вернули, слово на странице`, `${w3} -> ${await dw(page)}`);
+		await page.click('[aria-label="Настройки"]');
+		await page.waitForSelector('.sheet-backdrop input[aria-label="Размер текста"]');
+		const size = page.locator('.sheet-backdrop input[aria-label="Размер текста"]');
+		const size0 = await size.inputValue();
+		await size.fill("30");
+		await page.waitForTimeout(700);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(700);
+		step((await dw(page)) === w3 && (await onOpenPage(page)), `${tag} браузер: размер текста ${size0} -> 30 px, слово на странице`, `${w3} -> ${await dw(page)}`);
+		await shot("2b-font-30");
+		await page.click('[aria-label="Настройки"]');
+		await page.waitForSelector('.sheet-backdrop input[aria-label="Размер текста"]');
+		await page.locator('.sheet-backdrop input[aria-label="Размер текста"]').fill("14");
+		await page.waitForTimeout(700);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(700);
+		step((await dw(page)) === w3 && (await onOpenPage(page)), `${tag} браузер: размер текста 14 px, слово на странице`, `${w3} -> ${await dw(page)}`);
+		await shot("2c-font-14");
+		await page.click('[aria-label="Настройки"]');
+		await page.waitForSelector('.sheet-backdrop input[aria-label="Размер текста"]');
+		await page.locator('.sheet-backdrop input[aria-label="Размер текста"]').fill(size0);
+		await page.waitForTimeout(700);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(700);
+		step((await dw(page)) === w3 && (await onOpenPage(page)), `${tag} браузер: размер текста вернули (${size0} px), слово на странице`, `${w3} -> ${await dw(page)}`);
+
 		await toMode(page, "words", ".mode-words .word .p");
 		step((await dw(page)) === w3, `${tag} браузер: «По слову» то же слово`, `${await dw(page)} == ${w3}`);
 		await shot("3-words");
