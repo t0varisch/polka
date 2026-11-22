@@ -435,6 +435,101 @@ const pickPhrase = (p, frac) =>
 		return null;
 	}, frac);
 
+// Сквозные страницы: номер в подвале растёт ровно на 1, в том числе через границу куска; первая страница — 1, последняя — M
+async function pageNumberFlow(W, H, tag) {
+	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const page = await ctx.newPage();
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
+	const num = () =>
+		page.evaluate(() => {
+			const m = /стр\. (\d+) из (\d+)/.exec(document.querySelector(".pg-foot")?.textContent ?? "");
+			return m ? [Number(m[1]), Number(m[2])] : null;
+		});
+	const chunkKey = () => page.evaluate(() => document.querySelector(".pg-content span[data-w]")?.getAttribute("data-w") ?? "");
+	// Ползунок «Позиция» в навигации: value от 0 до 1000
+	const seekSlider = async (v) => {
+		await page.click('[aria-label="Оглавление и закладки"]');
+		await page.waitForSelector('.sheet-backdrop input[aria-label="Позиция в книге"]');
+		await page.evaluate((v) => {
+			const el = document.querySelector('.sheet-backdrop input[aria-label="Позиция в книге"]');
+			el.value = String(v);
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			el.dispatchEvent(new Event("change", { bubbles: true }));
+		}, v);
+		await page.waitForTimeout(300);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(500);
+	};
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(page, "pages", ".pg-content span[data-w]");
+		// Первое слово может стоять после страницы из одной обложки: тогда номер 2, а назад листается до 1
+		const firstPage = async () => {
+			let n = await num();
+			const at = n;
+			if (n && n[0] === 2) {
+				await page.keyboard.press("ArrowLeft");
+				await page.waitForTimeout(150);
+				n = await num();
+			}
+			return { at, n };
+		};
+		const first = await firstPage();
+		step(first.n?.[0] === 1 && first.n[1] > 1, `${tag} номера: первая страница книги — 1`, JSON.stringify(first));
+
+		await seekSlider(300);
+		// вперёд до границы куска, потом назад на три страницы до его конца
+		let k0 = await chunkKey();
+		let found = false;
+		for (let i = 0; i < 600 && !found; i++) {
+			await page.keyboard.press("ArrowRight");
+			await page.waitForTimeout(40);
+			if ((await chunkKey()) !== k0) found = true;
+		}
+		if (!step(found, `${tag} номера: найдена граница куска`)) throw new Error("нет границы куска");
+		for (let i = 0; i < 3; i++) {
+			await page.keyboard.press("ArrowLeft");
+			await page.waitForTimeout(80);
+		}
+		let prev = await num();
+		const seq = [prev];
+		let ok = true;
+		for (let i = 0; i < 6; i++) {
+			await page.keyboard.press("ArrowRight");
+			await page.waitForTimeout(80);
+			const cur = await num();
+			seq.push(cur);
+			if (!cur || !prev || cur[0] !== prev[0] + 1) ok = false;
+			prev = cur;
+		}
+		const a = seq[seq.length - 1];
+		const b = seq[seq.length - 2];
+		step(ok, `${tag} номера: шесть листаний вперёд через границу — каждый раз +1`, seq.map((x) => x?.join("/")).join(" "));
+		step(!!a && !!b && a[1] === b[1], `${tag} номера: «из M» на последних двух шагах тот же`, `${b?.[1]} ${a?.[1]}`);
+		await page.screenshot({ path: `${OUT}/${tag}-pagenum.png` });
+		step(!(await hscroll(page)), `${tag} номера: нет горизонтальной прокрутки`);
+		const footOk = await page.evaluate(() => {
+			const f = document.querySelector(".pg-foot");
+			return f.scrollWidth <= f.clientWidth + 1;
+		});
+		step(footOk, `${tag} номера: подвал не выходит за ширину`);
+
+		await seekSlider(1000);
+		const last = await num();
+		step(!!last && last[0] === last[1], `${tag} номера: на последнем слове книги номер = M`, JSON.stringify(last));
+		await seekSlider(0);
+		const first2 = await firstPage();
+		step(first2.n?.[0] === 1, `${tag} номера: на первом слове книги — 1`, JSON.stringify(first2));
+	} catch (e) {
+		step(false, `${tag} номера: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-pagenum-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+}
+
 // Поиск по книге: Ctrl+F / F3 / кнопка открывают лист, найденное открывается в каждом из трёх режимов
 async function searchFlow(W, H, tag) {
 	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
@@ -613,6 +708,7 @@ for (const [W, H] of SIZES) {
 	console.log(`## ${W}x${H}`);
 	await (IMG ? imgFlow : browserFlow)(W, H, tag);
 	if (!IMG) await searchFlow(W, H, tag);
+	await pageNumberFlow(W, H, tag);
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }

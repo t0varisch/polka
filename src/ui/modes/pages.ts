@@ -3,6 +3,7 @@
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
 import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "../../core/figures";
+import { estimateChunkPages, PageNumbers, paraLines } from "../../core/pagecount";
 import type { FontKind, Settings } from "../../settings";
 import { formatDuration, h, iconButton } from "../dom";
 import { FONT_OPTIONS, range, segmented, toggle } from "../settings-sheet";
@@ -91,6 +92,8 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	/** Общий номер первого рисунка, если открыта страница из одних рисунков; иначе -1. */
 	let figAnchor = -1;
 	let viewer: HTMLElement | null = null;
+	/** Сквозная нумерация: оценка по кускам, точное число у измеренных. */
+	let pageNums = new PageNumbers(chunks.map(() => 1));
 
 	function word(): number {
 		return anchor;
@@ -134,6 +137,50 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		laidW = w;
 		laidH = hh;
 		return true;
+	}
+
+	/** Средняя ширина знака шрифта страниц; без canvas (тесты, jsdom) — 0.5 кегля. */
+	function avgCharWidth(): number {
+		const fallback = s.pageSize * 0.5;
+		try {
+			const ctx = document.createElement("canvas").getContext("2d");
+			if (!ctx || typeof ctx.measureText !== "function") return fallback;
+			let sample = "";
+			for (const p of host.book.paragraphs) {
+				sample += p + " ";
+				if (sample.length >= 3000) break;
+			}
+			if (!sample.trim()) return fallback;
+			ctx.font = `${s.pageSize}px ${FONT_FAMILY[s.pageFont]}`;
+			const w = ctx.measureText(sample).width / sample.length;
+			return w > 0 ? w : fallback;
+		} catch {
+			return fallback;
+		}
+	}
+
+	/** Оценка страниц всех кусков под текущую геометрию; точные числа сбрасываются. */
+	function estimatePages(): void {
+		const charsPerLine = Math.max(10, Math.floor(colW / avgCharWidth()));
+		const g = { charsPerLine, linesPerPage: Math.max(1, colH / lineH) };
+		pageNums = new PageNumbers(
+			chunks.map((c, i) => {
+				const paras: { chars: number; heading: boolean }[] = [];
+				for (let p = c.fromPara; p < c.toPara; p++) {
+					paras.push({ chars: host.book.paragraphs[p]?.length ?? 0, heading: tocSet.has(p) });
+				}
+				let extra = 0;
+				for (const ix of (imgOfChunk[i] ?? []).filter(shown)) {
+					const im = images[ix];
+					const d = dims[ix] as { w: number; h: number };
+					const hasCap = !!im.caption || !!im.title;
+					const maxH = hasCap ? Math.max(3 * lineH, colH - 2 * lineH) : colH;
+					extra += Math.max(1, Math.ceil(fitSize(d.w, d.h, colW, Math.min(maxH, colH)).h / lineH));
+					if (im.title) extra += paraLines(im.title.length, charsPerLine, 0);
+				}
+				return estimateChunkPages(paras, extra, g);
+			}),
+		);
 	}
 
 	function objectUrl(ix: number): string {
@@ -305,6 +352,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		let next = c.toWord < total ? c.toWord : total - 1;
 		firstOf = new Array(pages);
 		wordless = new Array(pages);
+		pageNums.setMeasured(chunkIdx, pages);
 		for (let p = pages - 1; p >= 0; p--) {
 			wordless[p] = own[p] === undefined;
 			if (own[p] !== undefined) next = own[p] as number;
@@ -338,7 +386,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		const w = word();
 		const pct = (w / Math.max(1, total - 1)) * 100;
 		const rest = formatDuration(((total - w) / READ_WPM) * 60000);
-		foot.textContent = `стр. ${page + 1} из ${firstOf.length} · ${pct.toFixed(pct < 10 ? 1 : 0)}% · осталось ≈ ${rest}`;
+		foot.textContent = `стр. ${pageNums.startOf(chunkIdx) + page + 1} из ${pageNums.total} · ${pct.toFixed(pct < 10 ? 1 : 0)}% · осталось ≈ ${rest}`;
 	}
 
 	function flashHere(w: number): void {
@@ -380,12 +428,14 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		if (disposed) return;
 		const seq = ++layoutSeq;
 		if (!applyGeometry()) return;
+		estimatePages();
 		chunkIdx = -1;
 		openWord(anchor, false);
 		// Шрифт мог ещё не загрузиться: после его прихода колонки другие, меряем заново
 		if (document.fonts && document.fonts.status === "loading") {
 			await document.fonts.ready;
 			if (disposed || seq !== layoutSeq) return;
+			estimatePages();
 			chunkIdx = -1;
 			openWord(anchor, false);
 		}
