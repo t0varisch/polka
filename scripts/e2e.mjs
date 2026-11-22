@@ -1,6 +1,7 @@
 // Сквозная проверка Полки: режим браузера (импорт, страницы, по слову, печать, страницы, перезагрузка)
 // и режим папки (?testfolder, только chromium).
 // Сначала `npm run build`: скрипт без BASE сам поднимает `vite preview` на собранном dist/.
+// Рисунки: IMG_BOOK=путь.fb2 вместо BOOK — сценарий с рисунками на страницах и просмотром на весь экран.
 // Запуск: BOOK=путь.fb2 [SIZES=390x844,320x640,1280x800] [BROWSER=chromium|webkit] [BASE=http://...] [OUT=test-output] node scripts/e2e.mjs
 import { chromium, webkit } from "@playwright/test";
 import { spawn } from "node:child_process";
@@ -8,9 +9,10 @@ import { createServer } from "node:net";
 import { mkdirSync, readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
-const BOOK = process.env.BOOK;
+const IMG = !!process.env.IMG_BOOK;
+const BOOK = process.env.IMG_BOOK ?? process.env.BOOK;
 if (!BOOK) {
-	console.error("Нужен BOOK=путь/к/книге.fb2");
+	console.error("Нужен BOOK=путь/к/книге.fb2 или IMG_BOOK=путь/к/книге.fb2");
 	process.exit(2);
 }
 const SIZES = (process.env.SIZES ?? "390x844,320x640,1280x800").split(",").map((s) => s.split("x").map(Number));
@@ -68,6 +70,31 @@ const onOpenPage = (p) =>
 		const v = vp.getBoundingClientRect();
 		const r = sp.getBoundingClientRect();
 		return r.left >= v.left - 1 && r.right <= v.right + 1 && r.top >= v.top - 1 && r.bottom <= v.bottom + 1;
+	});
+// Рисунок, видимый на открытой странице (по горизонтали пересекает окно), с проверками
+const figInfo = (p) =>
+	p.evaluate(() => {
+		const vp = document.querySelector(".pg-page").getBoundingClientRect(); // видимая область: страница обрезает соседние колонки
+		const inside = (r) => r.left >= vp.left - 1 && r.right <= vp.right + 1 && r.top >= vp.top - 1 && r.bottom <= vp.bottom + 1;
+		for (const img of document.querySelectorAll("img.pg-img")) {
+			const r = img.getBoundingClientRect();
+			if (r.right <= vp.left + 1 || r.left >= vp.right - 1) continue;
+			const cap = img.closest("figure")?.querySelector(".pg-cap");
+			const cr = cap?.getBoundingClientRect();
+			const body = document.querySelector(".pg-content p:not(.pg-cap)");
+			return {
+				i: img.dataset.i,
+				ok: img.complete && img.naturalWidth > 0,
+				inside: inside(r),
+				cap: cap ? cap.textContent : null,
+				capTag: cap ? cap.tagName : null,
+				capInside: cr ? inside(cr) : null,
+				capFont: cap ? getComputedStyle(cap).fontFamily : null,
+				bodyFont: body ? getComputedStyle(body).fontFamily : null,
+				box: [Math.round(r.width), Math.round(r.height)],
+			};
+		}
+		return null;
 	});
 const hscroll = (p) => p.evaluate(() => document.documentElement.scrollWidth > innerWidth);
 
@@ -194,6 +221,139 @@ async function browserFlow(W, H, tag) {
 	await ctx.close();
 }
 
+// Листает вперёд до страницы с рисунком (у chipolla — с подписью «Рис.»), не больше 300 страниц
+async function findFigPage(page) {
+	const want = bookName === "chipolla" ? (f) => f.cap && f.cap.includes("Рис.") : () => true;
+	let stuck = 0;
+	for (let n = 0; n < 300; n++) {
+		const f = await figInfo(page);
+		if (f && want(f)) return f;
+		const w = await dw(page);
+		await page.keyboard.press("ArrowRight");
+		await page.waitForTimeout(60);
+		const w2 = await dw(page);
+		stuck = w2 === w && !(await figInfo(page)) ? stuck + 1 : 0;
+		if (stuck >= 3) break;
+	}
+	return null;
+}
+const imgSel = (i) => 'img.pg-img[data-i="' + i + '"]';
+
+async function imgFlow(W, H, tag) {
+	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const page = await ctx.newPage();
+	const shot = (n) => page.screenshot({ path: `${OUT}/${tag}-img-${n}.png` });
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
+	page.on("console", (m) => m.type() === "error" && step(false, `${tag} ошибка в консоли`, m.text()));
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(page, "pages", ".pg-content span[data-w]");
+
+		// 1. страница с рисунком
+		const f0 = await findFigPage(page);
+		if (!step(!!f0, `${tag} рисунки: страница с рисунком найдена`, f0 ? `рисунок ${f0.i}, ${f0.box.join("x")}` : "")) throw new Error("нет страницы с рисунком");
+		step(f0.ok && f0.inside, `${tag} рисунки: загружен, целиком в окне страниц`, JSON.stringify(f0.box));
+		if (bookName === "chipolla") {
+			step(f0.capTag === "P" && f0.cap.includes("Рис.") && f0.capInside, `${tag} рисунки: подпись «Рис.» на той же странице`, f0.cap);
+			step(!!f0.capFont && f0.capFont !== f0.bodyFont, `${tag} рисунки: шрифт подписи другой`, `${f0.capFont} / ${f0.bodyFont}`);
+		}
+		await shot("1-page");
+		const w0 = await dw(page);
+
+		// 2. просмотр на весь экран
+		await page.click(imgSel(f0.i));
+		await page.waitForSelector(".pg-viewer", { timeout: 5000 });
+		await page.waitForTimeout(300);
+		const vi = await page.evaluate(() => {
+			const v = document.querySelector(".pg-viewer").getBoundingClientRect();
+			const im = document.querySelector(".pg-viewer img");
+			const r = im.getBoundingClientRect();
+			return { full: v.width >= innerWidth - 1 && v.height >= innerHeight - 1, fits: r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1, ok: im.naturalWidth > 0 };
+		});
+		step(vi.full && vi.fits && vi.ok, `${tag} рисунки: просмотр открыт на весь экран, рисунок целиком`, JSON.stringify(vi));
+		await shot("2-viewer");
+		await page.keyboard.press("ArrowRight");
+		await page.waitForTimeout(200);
+		step((await dw(page)) === w0, `${tag} рисунки: в просмотре стрелки не листают`);
+		await page.mouse.click(W / 2, H / 2);
+		await page.waitForTimeout(300);
+		const f1 = await figInfo(page);
+		step(!(await page.$(".pg-viewer")) && (await dw(page)) === w0 && !!f1 && f1.i === f0.i, `${tag} рисунки: нажатие закрыло просмотр, слово и страница те же`);
+		await page.click(imgSel(f0.i));
+		await page.waitForSelector(".pg-viewer");
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(300);
+		step(!(await page.$(".pg-viewer")) && !!(await page.$("div.book[data-mode]")) && (await dw(page)) === w0, `${tag} рисунки: Escape закрыл просмотр, остались в книге`);
+
+		// 3. смена окна
+		const alt = W >= 800 ? [390, 844] : [W === 390 ? 1280 : 1100, 700];
+		await page.setViewportSize({ width: alt[0], height: alt[1] });
+		await page.waitForTimeout(1000);
+		const n2 = await page.evaluate(() => document.querySelectorAll("img.pg-img").length);
+		const f2 = await figInfo(page);
+		step(n2 > 0 && (!f2 || f2.inside) && (await dw(page)) === w0, `${tag} рисунки: смена окна на ${alt[0]}x${alt[1]}, слово то же, рисунок целиком`, f2 ? `виден ${f2.i}` : "рисунок на соседней странице");
+		await shot("3-resized");
+		await page.setViewportSize({ width: W, height: H });
+		await page.waitForTimeout(1000);
+		step((await dw(page)) === w0, `${tag} рисунки: окно вернули, слово то же`);
+
+		// 4. «По слову» и обратно
+		await toMode(page, "words", ".mode-words .word .p");
+		await toMode(page, "pages", ".pg-content span[data-w]");
+		step((await dw(page)) === w0 && (await onOpenPage(page)), `${tag} рисунки: «По слову» и обратно, слово то же`, `${await dw(page)} == ${w0}`);
+
+		// 5. старый кэш: у книги убраны images и v
+		await page.waitForTimeout(3500);
+		const id = await page.evaluate(() => decodeURIComponent(location.hash.split("/")[2]));
+		await page.evaluate(
+			(key) =>
+				new Promise((res, rej) => {
+					const o = indexedDB.open("polka");
+					o.onerror = () => rej(o.error);
+					o.onsuccess = () => {
+						const d = o.result;
+						const tx = d.transaction("texts", "readwrite");
+						const st = tx.objectStore("texts");
+						const g = st.get(key);
+						g.onsuccess = () => {
+							const v = g.result;
+							delete v.images;
+							delete v.v;
+							st.put(v);
+						};
+						tx.oncomplete = () => (d.close(), res());
+						tx.onerror = () => rej(tx.error);
+					};
+				}),
+			id,
+		);
+		await page.reload();
+		await page.waitForSelector("div.book[data-mode]", { timeout: 30000 });
+		await page.waitForSelector(".pg-content span[data-w]", { timeout: 30000 });
+		await page.waitForTimeout(600);
+		const noImg = await page.evaluate(() => document.querySelectorAll("img.pg-img").length);
+		step(noImg === 0, `${tag} рисунки: старый кэш — книга открылась, рисунков нет`, String(noImg));
+		const wOld = await dw(page);
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await page.waitForSelector(".pg-content span[data-w]", { timeout: 30000 });
+		await page.waitForTimeout(800);
+		const wNew = await dw(page);
+		const f3 = await findFigPage(page);
+		step(!!f3 && f3.ok && wNew === wOld, `${tag} рисунки: тот же файл ещё раз — рисунки появились, слово то же`, `слово ${wOld} -> ${wNew}`);
+		step(!(await hscroll(page)), `${tag} рисунки: нет горизонтальной прокрутки`);
+	} catch (e) {
+		step(false, `${tag} рисунки: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-img-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+}
+
 async function folderFlow(W, H, tag) {
 	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
@@ -221,6 +381,13 @@ async function folderFlow(W, H, tag) {
 		await page.click(".book-open");
 		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
 		await toMode(page, "pages", ".pg-content span[data-w]");
+		if (IMG) {
+			const fi = await findFigPage(page);
+			step(!!fi && fi.ok && fi.inside, `${tag} папка: на странице с рисунком картинка видна и целиком`, fi ? JSON.stringify(fi.box) : "нет рисунка");
+			await shot("3-img");
+			await ctx.close();
+			return;
+		}
 		const w0 = await dw(page);
 		for (let i = 0; i < 3; i++) {
 			await page.keyboard.press("ArrowRight");
@@ -250,7 +417,7 @@ console.log(`# ${BROWSER}, книга ${basename(BOOK)}, ${base}, снимки �
 for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
 	console.log(`## ${W}x${H}`);
-	await browserFlow(W, H, tag);
+	await (IMG ? imgFlow : browserFlow)(W, H, tag);
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }

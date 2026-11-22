@@ -378,7 +378,7 @@ function mountBook(
 	// ---- клавиши оболочки; в печати Escape и буквы принадлежат режиму
 	const onKey = (e: KeyboardEvent) => {
 		if (isDisposed() || mode === "typing") return;
-		if (document.querySelector(".sheet-backdrop")) return;
+		if (document.querySelector(".sheet-backdrop, .pg-viewer")) return;
 		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 		if (e.key === "Escape") ctx.goLibrary();
 		else if (e.key === "b" || e.key === "и") addBookmark();

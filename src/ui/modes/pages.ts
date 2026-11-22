@@ -2,8 +2,9 @@
 // Место в книге — первое слово открытой страницы.
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
+import { fitSize, imagesByChunk } from "../../core/figures";
 import type { FontKind, Settings } from "../../settings";
-import { formatDuration, h } from "../dom";
+import { formatDuration, h, iconButton } from "../dom";
 import { FONT_OPTIONS, range, segmented, toggle } from "../settings-sheet";
 import type { ModeFactory, ModeHost, ModeView } from "./types";
 
@@ -44,6 +45,14 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	const tocSet = new Set(tocParas);
 	const chunks: Chunk[] = buildChunks(stream, host.book.paragraphs.length, tocParas);
 	const lang = detectLang(host.book.paragraphs);
+	const images = host.book.images ?? [];
+	const imgOfChunk: number[][] = imagesByChunk(chunks, images, host.book.paragraphs.length);
+	const chunkOfImg: number[] = [];
+	imgOfChunk.forEach((list, ci) => list.forEach((ix) => (chunkOfImg[ix] = ci)));
+	/** Размеры рисунков: null — не показывается (не декодировался). */
+	const dims: ({ w: number; h: number } | null)[] = images.map((im) => (im.w > 0 && im.h > 0 ? { w: im.w, h: im.h } : null));
+	const urls: (string | undefined)[] = [];
+	const bad = new Set<number>();
 
 	const content = h("div.pg-content", { lang });
 	const pageBox = h("div.pg-page", {}, content);
@@ -66,6 +75,20 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	let anchor = Math.max(0, Math.min(startWord, Math.max(0, total - 1)));
 	let highlightNext = true;
 	let layoutSeq = 0;
+	// Размеры колонки (для рисунков) и строки
+	let colW = 0;
+	let colH = 0;
+	let lineH = 0;
+	/** Рисунки открытого куска: общий номер и элемент. */
+	let figs: { idx: number; img: HTMLImageElement }[] = [];
+	/** Страницы открытого куска без начала слова. */
+	let wordless: boolean[] = [];
+	/** Первый рисунок страницы (общий номер) и страница рисунка. */
+	let pageFirstImg: number[] = [];
+	let pageOfImg = new Map<number, number>();
+	/** Общий номер первого рисунка, если открыта страница из одних рисунков; иначе -1. */
+	let figAnchor = -1;
+	let viewer: HTMLElement | null = null;
 
 	function word(): number {
 		return anchor;
@@ -81,6 +104,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		const hh = viewport.clientHeight;
 		if (w <= 0 || hh <= 0) return false;
 		const lh = s.pageSize * s.lineHeight;
+		lineH = lh;
 		const padV = 16;
 		// Высота — целое число строк: внизу нет обрезанной строки
 		const lines = Math.max(1, Math.floor((hh - 2 * padV) / lh));
@@ -89,6 +113,9 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		const m = margin(pageW);
 		view.style.setProperty("--pg-font", FONT_FAMILY[s.pageFont]);
 		view.style.setProperty("--pg-size", `${s.pageSize}px`);
+		// Подпись под рисунком — другого рода шрифт, чем основной текст
+		view.style.setProperty("--pg-cap-font", s.pageFont === "serif" ? FONT_FAMILY.sans : FONT_FAMILY.serif);
+		view.style.setProperty("--pg-cap-style", s.pageFont === "serif" ? "normal" : "italic");
 		view.classList.toggle("justify", s.justify);
 		const st = content.style;
 		st.lineHeight = `${lh}px`;
@@ -97,6 +124,8 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		st.columnWidth = `${pageW - 2 * m}px`;
 		st.columnGap = `${2 * m}px`;
 		st.marginLeft = `${m}px`;
+		colW = pageW - 2 * m;
+		colH = lines * lh;
 		pageBox.style.left = `${off}px`;
 		pageBox.style.width = `${pageW}px`;
 		st.top = `${Math.floor((hh - lines * lh) / 2)}px`;
@@ -105,14 +134,83 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		return true;
 	}
 
+	function objectUrl(ix: number): string {
+		let u = urls[ix];
+		if (!u) {
+			const im = images[ix];
+			u = URL.createObjectURL(new Blob([im.data as BlobPart], { type: im.mime }));
+			urls[ix] = u;
+		}
+		return u;
+	}
+
+	/** Декодирует рисунки с неизвестным размером; не декодировавшиеся не показываются. */
+	async function probeImages(): Promise<void> {
+		await Promise.all(
+			images.map(async (_im, ix) => {
+				if (dims[ix]) return;
+				try {
+					const el = new Image();
+					el.src = objectUrl(ix);
+					await el.decode();
+					if (el.naturalWidth > 0 && el.naturalHeight > 0) dims[ix] = { w: el.naturalWidth, h: el.naturalHeight };
+				} catch {
+					// битый рисунок пропускаем молча
+				}
+			}),
+		);
+	}
+
+	function shown(ix: number): boolean {
+		return !!dims[ix] && !bad.has(ix);
+	}
+
+	/** Рисунок с размером под колонку; место под подпись оставлено в maxH. */
+	function makeFigure(ix: number, cap: HTMLElement | null): HTMLElement {
+		const im = images[ix];
+		const hasCap = !!cap || !!im.title;
+		const d = dims[ix] as { w: number; h: number };
+		const maxH = hasCap ? Math.max(3 * lineH, colH - 2 * lineH) : colH;
+		const size = fitSize(d.w, d.h, colW, Math.min(maxH, colH));
+		const img = h("img.pg-img", { alt: "", draggable: "false" }) as HTMLImageElement;
+		img.dataset.i = String(ix);
+		img.style.width = `${size.w}px`;
+		img.style.height = `${size.h}px`;
+		img.addEventListener("error", () => {
+			if (disposed || bad.has(ix)) return;
+			bad.add(ix);
+			void relayout();
+		});
+		img.src = objectUrl(ix);
+		const box = h("div.pg-imgbox", {}, img);
+		// Высота блока — целое число строк, но не больше колонки (иначе Chrome уводит картинку в соседнюю колонку)
+		const boxH = Math.min(Math.max(1, Math.ceil(size.h / lineH)) * lineH, colH - 0.5);
+		box.style.height = `${boxH}px`;
+		img.style.marginTop = `${Math.max(0, Math.floor((boxH - size.h) / 2))}px`;
+		const fig = h("figure.pg-fig", {}, box);
+		if (cap) fig.append(cap);
+		else if (im.title) fig.append(h("div.pg-cap", {}, im.title));
+		figs.push({ idx: ix, img });
+		return fig;
+	}
+
 	function renderChunk(i: number): void {
 		const c = chunks[i];
 		const frag = document.createDocumentFragment();
 		spans = new Array(c.toWord - c.fromWord);
-		for (let p = c.fromPara; p < c.toPara; p++) {
+		figs = [];
+		const mine = (imgOfChunk[i] ?? []).filter(shown);
+		const atPara = new Map<number, number[]>();
+		for (const ix of mine) {
+			const at = Math.min(images[ix].at, c.toPara);
+			const l = atPara.get(at);
+			if (l) l.push(ix);
+			else atPara.set(at, [ix]);
+		}
+		const paraEl = (p: number, tag: string): HTMLElement | null => {
 			const len = stream.paraLens[p] ?? 0;
-			if (len === 0) continue;
-			const el = h(tocSet.has(p) ? "h2" : "p");
+			if (len === 0) return null;
+			const el = h(tag as "p");
 			const from = stream.paraStarts[p];
 			for (let k = 0; k < len; k++) {
 				const sp = h("span", { "data-w": from + k }, stream.words[from + k].text);
@@ -120,28 +218,57 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 				if (k > 0) el.append(" ");
 				el.append(sp);
 			}
-			frag.append(el);
+			return el;
+		};
+		for (let p = c.fromPara; p <= c.toPara; p++) {
+			let capUsed = false;
+			for (const ix of atPara.get(p) ?? []) {
+				let cap: HTMLElement | null = null;
+				// Абзац-заголовок остаётся заголовком: подписью не становится
+				if (!capUsed && images[ix].caption && p < c.toPara && !tocSet.has(p)) {
+					cap = paraEl(p, "p.pg-cap");
+					if (cap) capUsed = true;
+				}
+				frag.append(makeFigure(ix, cap));
+			}
+			if (p === c.toPara || capUsed) continue;
+			const el = paraEl(p, tocSet.has(p) ? "h2" : "p");
+			if (el) frag.append(el);
 		}
 		content.replaceChildren(frag);
 		chunkIdx = i;
 	}
 
-	/** Страницы слов куска и первое слово каждой страницы. */
+	/** Страницы куска (слова и рисунки), первое слово каждой страницы. */
 	function measure(): void {
 		const c = chunks[chunkIdx];
-		firstOf = [];
-		let last = -1;
+		const own: (number | undefined)[] = [];
+		let pages = 0;
 		for (let k = 0; k < spans.length; k++) {
 			const sp = spans[k];
 			if (!sp) continue;
 			const pg = Math.max(0, Math.floor(sp.offsetLeft / pageW));
-			while (last < pg) {
-				last++;
-				// Страница без начала слова (очень длинный заголовок) берёт слово предыдущей
-				firstOf[last] = last === pg ? c.fromWord + k : (firstOf[last - 1] ?? c.fromWord + k);
-			}
+			if (own[pg] === undefined) own[pg] = c.fromWord + k;
+			pages = Math.max(pages, pg + 1);
 		}
-		if (firstOf.length === 0) firstOf = [c.fromWord];
+		pageFirstImg = [];
+		pageOfImg = new Map();
+		for (const f of figs) {
+			const pg = Math.max(0, Math.floor(f.img.offsetLeft / pageW));
+			pageOfImg.set(f.idx, pg);
+			if (pageFirstImg[pg] === undefined) pageFirstImg[pg] = f.idx;
+			pages = Math.max(pages, pg + 1);
+		}
+		if (pages === 0) pages = 1;
+		// Страница без начала слова берёт первое слово после неё; дальше слов нет — конец куска
+		let next = c.toWord < total ? c.toWord : total - 1;
+		firstOf = new Array(pages);
+		wordless = new Array(pages);
+		for (let p = pages - 1; p >= 0; p--) {
+			wordless[p] = own[p] === undefined;
+			if (own[p] !== undefined) next = own[p] as number;
+			firstOf[p] = next;
+		}
 	}
 
 	function pageOfWord(w: number): number {
@@ -155,6 +282,8 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 				lo = mid + 1;
 			} else hi = mid - 1;
 		}
+		// Страница из одних рисунков в конце куска слов не содержит
+		while (res > 0 && wordless[res]) res--;
 		return res;
 	}
 
@@ -185,12 +314,23 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	function openWord(w: number, highlight: boolean): void {
 		if (chunks.length === 0) return;
 		w = Math.max(0, Math.min(w, total - 1));
-		const i = chunkOfWord(chunks, w);
+		let i = chunkOfWord(chunks, w);
+		// Открыта страница из одних рисунков: остаёмся на странице с тем же первым рисунком
+		if (figAnchor >= 0 && shown(figAnchor) && chunkOfImg[figAnchor] !== undefined) i = chunkOfImg[figAnchor];
+		else figAnchor = -1;
 		if (i !== chunkIdx) {
 			renderChunk(i);
 			measure();
 		}
-		showPage(pageOfWord(w));
+		let pg = pageOfWord(w);
+		if (figAnchor >= 0) {
+			const p = pageOfImg.get(figAnchor);
+			if (p !== undefined) {
+				pg = p;
+				if (!wordless[p]) figAnchor = -1;
+			} else figAnchor = -1;
+		}
+		showPage(pg);
 		if (highlight) flashHere(w);
 	}
 
@@ -215,7 +355,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	}
 
 	function turn(dir: 1 | -1): void {
-		if (disposed || chunkIdx < 0) return;
+		if (disposed || chunkIdx < 0 || viewer) return;
 		if (dir === 1) {
 			if (page < firstOf.length - 1) showPage(page + 1);
 			else if (chunkIdx < chunks.length - 1) {
@@ -230,13 +370,41 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 			showPage(firstOf.length - 1);
 		} else return;
 		anchor = firstOf[page];
+		figAnchor = wordless[page] ? (pageFirstImg[page] ?? -1) : -1;
 		updateFoot();
 		host.report(anchor);
 	}
 
+	// ---- просмотр рисунка на весь экран
+	const onViewerKey = (e: KeyboardEvent) => {
+		if (e.key !== "Escape") return;
+		e.preventDefault();
+		e.stopImmediatePropagation();
+		closeViewer();
+	};
+	function closeViewer(): void {
+		if (!viewer) return;
+		viewer.remove();
+		viewer = null;
+		window.removeEventListener("keydown", onViewerKey, true);
+	}
+	function openViewer(ix: number): void {
+		if (viewer || disposed) return;
+		const img = h("img", { alt: "", draggable: "false" }) as HTMLImageElement;
+		img.src = objectUrl(ix);
+		const close = iconButton("close", "Закрыть", closeViewer, "pg-viewer-close");
+		const v = h("div.pg-viewer", { role: "dialog", "aria-label": "Рисунок" }, img, close);
+		v.addEventListener("click", closeViewer);
+		document.body.append(v);
+		viewer = v;
+		// Escape в фазе перехвата: оболочка книги его уже не увидит
+		window.addEventListener("keydown", onViewerKey, true);
+		close.focus({ preventScroll: true });
+	}
+
 	// ---- управление
 	const onKey = (e: KeyboardEvent) => {
-		if (document.querySelector(".sheet-backdrop")) return;
+		if (viewer || document.querySelector(".sheet-backdrop")) return;
 		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 		if (e.ctrlKey || e.metaKey || e.altKey) return;
 		if (e.key === " " && e.target instanceof HTMLButtonElement) return;
@@ -255,6 +423,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		(e) => {
 			if (e.ctrlKey) return;
 			e.preventDefault();
+			if (viewer) return;
 			// время обновляем на каждое событие: инерция тачпада тянется дольше паузы, и один жест — одна страница
 			const now = performance.now();
 			const quiet = now - lastWheel >= WHEEL_GAP_MS;
@@ -303,6 +472,12 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		if (performance.now() - swipedAt < 400) return;
 		const sel = window.getSelection();
 		if (sel && !sel.isCollapsed) return;
+		const pic = e.target instanceof Element ? e.target.closest("img.pg-img") : null;
+		if (pic) {
+			const f = figs.find((x) => x.img === pic);
+			if (f) openViewer(f.idx);
+			return;
+		}
 		const r = viewport.getBoundingClientRect();
 		turn(e.clientX - r.left < r.width / 3 ? -1 : 1);
 	});
@@ -314,6 +489,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		if (viewport.clientWidth === laidW && viewport.clientHeight === laidH) return;
 		void relayout();
 	};
+	await probeImages();
 	let observer: ResizeObserver | null = null;
 	if (typeof ResizeObserver !== "undefined") {
 		observer = new ResizeObserver(onResize);
@@ -327,6 +503,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		seek(w) {
 			if (disposed) return;
 			anchor = Math.max(0, Math.min(w, Math.max(0, total - 1)));
+			figAnchor = -1;
 			if (laidW === 0) {
 				highlightNext = true;
 				return;
@@ -364,6 +541,9 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 			observer?.disconnect();
 			window.removeEventListener("resize", onResize);
 			document.removeEventListener("keydown", onKey);
+			closeViewer();
+			for (const u of urls) if (u) URL.revokeObjectURL(u);
+			urls.length = 0;
 		},
 	};
 	return self;
