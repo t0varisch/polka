@@ -304,8 +304,23 @@ div.book {
 	overflow: hidden;
 }
 .progress {
-	height: 2px;
+	position: relative;
+	height: 3px;
 	background: var(--line);
+}
+.ticks {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+.ticks .tick {
+	position: absolute;
+	top: 0;
+	width: 1px;
+	height: 8px;
+	background: var(--muted);
+	opacity: 0.6;
+	pointer-events: none;
 }
 .progress-fill {
 	height: 100%;
@@ -632,6 +647,29 @@ input[type="range"] {
 	accent-color: var(--accent);
 	height: 28px;
 	margin: 0;
+}
+.range-wrap {
+	position: relative;
+}
+.range-wrap input[type="range"] {
+	position: relative;
+}
+.range-ticks {
+	position: absolute;
+	left: 9px;
+	right: 9px;
+	top: 50%;
+	height: 10px;
+	margin-top: -5px;
+	pointer-events: none;
+}
+.range-ticks .tick {
+	position: absolute;
+	top: 0;
+	width: 1px;
+	height: 100%;
+	background: var(--muted);
+	opacity: 0.6;
 }
 .segmented {
 	display: flex;

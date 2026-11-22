@@ -6,7 +6,7 @@ import type { Library } from "../library/types";
 import type { Settings } from "../settings";
 import type { Bookmark, BookRecord, Mode, OpenedBook } from "../types";
 import { h, icon, iconButton, toast } from "./dom";
-import { buildChapters, chapterAt, openNav } from "./nav";
+import { buildChapters, chapterAt, chapterTicks, openNav, tickLayer } from "./nav";
 import { type ModeFactory, type ModeHost, type ModeView } from "./modes/types";
 import { pagesMode } from "./modes/pages";
 import { typingMode } from "./modes/typing";
@@ -195,7 +195,7 @@ function mountBook(
 	const book = h(
 		"div.book",
 		{ "data-mode": mode, "data-word": record.position.word },
-		h("div.progress", { "aria-hidden": "true" }, bar),
+		h("div.progress", { "aria-hidden": "true" }, bar, tickLayer(chapterTicks(chapters, total), "ticks")),
 		h(
 			"header.topbar",
 			{},

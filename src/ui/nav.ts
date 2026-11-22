@@ -27,6 +27,34 @@ export function chapterAt(sorted: ChapterMark[], word: number): ChapterMark | nu
 	return found;
 }
 
+/**
+ * Проценты (0–100) начал глав для засечек на линии места и ползунке.
+ * Берётся наименьший уровень оглавления; если таких глав меньше двух — все уровни.
+ * Без нуля и без повторов ближе 0.2%; больше max — равномерно прореживаем.
+ */
+export function chapterTicks(chapters: ChapterMark[], total: number, max = 150): number[] {
+	if (chapters.length === 0 || total <= 1) return [];
+	const top = Math.min(...chapters.map((c) => c.level));
+	const topLevel = chapters.filter((c) => c.level === top);
+	const used = topLevel.length >= 2 ? topLevel : chapters;
+	const pcts = used.map((c) => (c.word / (total - 1)) * 100).sort((a, b) => a - b);
+	const ticks: number[] = [];
+	for (const p of pcts) {
+		if (p <= 0 || p > 100) continue;
+		if (ticks.length && p - ticks[ticks.length - 1] < 0.2) continue;
+		ticks.push(p);
+	}
+	if (ticks.length <= max) return ticks;
+	return Array.from({ length: max }, (_, i) => ticks[Math.floor((i * ticks.length) / max)]);
+}
+
+/** Слой засечек: i.tick с left в процентах; сам слой не ловит касания. */
+export function tickLayer(ticks: number[], cls: string): HTMLElement {
+	const layer = h(`div.${cls}` as "div", { "aria-hidden": "true" });
+	for (const p of ticks) layer.append(h("i.tick", { style: `left:${p.toFixed(2)}%` }));
+	return layer;
+}
+
 export interface NavCtx {
 	stream: WordStream;
 	chapters: ChapterMark[];
@@ -119,7 +147,7 @@ export function openNav(ctx: NavCtx): () => void {
 	tabToc.addEventListener("click", () => select(true));
 	tabMarks.addEventListener("click", () => select(false));
 
-	const body = h("div.nav", {}, h("label.row.range-row", {}, h("span.row-label", {}, "Позиция", posOut), pos), h("div.tabs", { role: "tablist" }, tabToc, tabMarks), panes);
+	const body = h("div.nav", {}, h("label.row.range-row", {}, h("span.row-label", {}, "Позиция", posOut), h("div.range-wrap", {}, tickLayer(chapterTicks(ctx.chapters, n), "range-ticks"), pos)), h("div.tabs", { role: "tablist" }, tabToc, tabMarks), panes);
 	const close = openSheet("Навигация", body);
 	requestAnimationFrame(() => tocList.querySelector(".current")?.scrollIntoView({ block: "center" }));
 	return close;

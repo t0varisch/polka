@@ -702,6 +702,42 @@ async function folderFlow(W, H, tag) {
 	await ctx.close();
 }
 
+// Засечки глав: на линии места и на ползунке «Позиция»; шапка и лист без горизонтальной прокрутки
+async function ticksFlow(W, H, tag) {
+	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const page = await ctx.newPage();
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(page, "pages", ".pg-content span[data-w]");
+		const lefts = await page.$$eval(".progress .tick", (els) => els.map((e) => parseFloat(e.style.left)));
+		const inRange = lefts.every((l) => l > 0 && l <= 100) && lefts.every((l, i) => i === 0 || l > lefts[i - 1]);
+		await page.screenshot({ path: `${OUT}/${tag}-ticks-top.png`, clip: { x: 0, y: 0, width: W, height: 90 } });
+		await page.click('[aria-label="Оглавление и закладки"]');
+		await page.waitForSelector(".sheet-backdrop .toc-list");
+		await page.waitForTimeout(400);
+		const tocItems = await page.$$eval(".sheet-backdrop .toc-item", (els) => els.length);
+		const sheetTicks = await page.$$eval(".sheet-backdrop .range-ticks .tick", (els) => els.length);
+		const hs = await hscroll(page);
+		await page.screenshot({ path: `${OUT}/${tag}-ticks-nav.png` });
+		if (tocItems >= 2) {
+			step(lefts.length > 0 && inRange, `${tag} засечки на линии места`, `${lefts.length} шт., оглавление ${tocItems}`);
+			step(sheetTicks === lefts.length, `${tag} засечки на ползунке «Позиция»`, `${sheetTicks} шт.`);
+		} else {
+			step(lefts.length === 0 && sheetTicks === 0, `${tag} без оглавления засечек нет`, `${lefts.length}/${sheetTicks}`);
+		}
+		step(!hs, `${tag} засечки: нет горизонтальной прокрутки`);
+		await page.keyboard.press("Escape");
+	} catch (e) {
+		step(false, `${tag} засечки: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-ticks-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+}
+
 console.log(`# ${BROWSER}, книга ${basename(BOOK)}, ${base}, снимки в ${OUT}`);
 for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
@@ -709,6 +745,7 @@ for (const [W, H] of SIZES) {
 	await (IMG ? imgFlow : browserFlow)(W, H, tag);
 	if (!IMG) await searchFlow(W, H, tag);
 	await pageNumberFlow(W, H, tag);
+	await ticksFlow(W, H, tag);
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }
