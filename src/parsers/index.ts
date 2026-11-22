@@ -2,7 +2,7 @@
 import type { ParsedBook } from "../types";
 import { detectUtf16NoBom, latin1Head } from "./decode";
 import { parseFb2 } from "./fb2";
-import { dropPrintedToc } from "./postprocess";
+import { dropHeadingCaptions, dropPrintedToc } from "./postprocess";
 import { bookFromText, detectToc, parseTxt } from "./txt";
 import { BookParseError, ERR_BROKEN, ERR_EMPTY, ERR_UNKNOWN, cleanParagraph } from "./util";
 import type { PdfjsSource } from "./pdf";
@@ -142,6 +142,8 @@ export async function parseFile(file: File, opts: ParseOptions = {}): Promise<Pa
 	// нет оглавления в файле — ищем заголовки «Глава 1», «Часть II», «Пролог» в тексте
 	if (!book.toc.length) opts.onStage?.("ищу главы");
 	if (!book.toc.length) book.toc = detectToc(book.paragraphs, book.format === "txt" || book.format === "text");
+	// абзац, ставший заголовком, подписью не бывает
+	book = dropHeadingCaptions(book);
 	opts.onProgress?.(1);
 	return book;
 }

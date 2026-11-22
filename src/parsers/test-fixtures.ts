@@ -162,3 +162,35 @@ export function fb2WithImages(): string {
 <binary id="broken.png" content-type="image/png">это не base64 !!!</binary>
 </FictionBook>`;
 }
+
+/**
+ * FB2 с подписями под рисунками (рисунки pic1…pic12 — одна и та же PNG).
+ * Абзацы по порядку: 0 «Глава 1», 1 «Вступление.», 2 subtitle, 3 «Текст раз.», 4 курсив, 5 «Текст два.», 6 «Рис. 2», 7 «Текст три.»,
+ * 8 длинный, 9 длинный абзац, 10 «Абзац с рисунком внутри.», 11 «Рис. 3», 12 «Глава 2», 13 «Подпись после двух».
+ */
+export function fb2WithCaptions(): string {
+	const long = "Этот абзац идёт сразу после рисунка, но он обычный текст книги, а не подпись, потому что он длинный и заканчивается точкой.";
+	const italic = "Подпись курсивом, которая длиннее восьмидесяти знаков и заканчивается точкой, чтобы доказать разметку.";
+	const ids = Array.from({ length: 12 }, (_, i) => `pic${i + 1}`);
+	return `<?xml version="1.0" encoding="utf-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+<description><title-info><author><last-name>Подписант</last-name></author><book-title>Книга с подписями</book-title></title-info></description>
+<body><section><title><p>Глава 1</p></title>
+<p>Вступление.</p>
+<image l:href="#pic1"/><empty-line/><subtitle>Подушка, вид сбоку, и ещё немного слов для длины, чтобы не быть короткой строкой.</subtitle>
+<p>Текст раз.</p>
+<image l:href="#pic2"/><p><emphasis>${italic}</emphasis></p>
+<p>Текст два.</p>
+<image l:href="#pic3"/><p>Рис. 2</p>
+<p>Текст три.</p>
+<image l:href="#pic4"/><p>${long}</p>
+<image l:href="#pic5" title="Схема сна"/><p>Ещё один обычный абзац. ${long}</p>
+<p>Абзац с рисунком <image l:href="#pic6"/> внутри.</p>
+<p>Рис. 3</p>
+<image l:href="#pic7"/>
+<section><title><p>Глава 2</p></title>
+<image l:href="#pic8"/><image l:href="#pic9" title="Вторая"/><p>Подпись после двух</p>
+</section></section></body>
+${ids.map((id) => `<binary id="${id}" content-type="image/png">${PNG_1X1_BASE64}</binary>`).join("\n")}
+</FictionBook>`;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BookImage, ParsedBook } from "../types";
-import { dropPrintedToc } from "./postprocess";
+import { dropHeadingCaptions, dropPrintedToc } from "./postprocess";
 
 const LONG = "Длинный абзац настоящего текста книги, который точно не похож на строку оглавления и длиннее ста знаков, чтобы разбор остановился.";
 
@@ -38,5 +38,41 @@ describe("dropPrintedToc: рисунки", () => {
 
 	it("книга без рисунков остаётся без images", () => {
 		expect(dropPrintedToc(book()).images).toBeUndefined();
+	});
+});
+
+describe("dropPrintedToc и подписи", () => {
+	it("абзац подписи выброшен — caption снимается, title остаётся", () => {
+		const b = book([{ ...img(3, 1), caption: true, title: "Схема" }, { ...img(6, 2), caption: true }]);
+		const out = dropPrintedToc(b);
+		expect(out.images![0].at).toBe(2);
+		expect("caption" in out.images![0]).toBe(false);
+		expect(out.images![0].title).toBe("Схема");
+		// абзац 6 не выброшен — подпись остаётся и едет вместе с абзацем
+		expect(out.images![1].at).toBe(2);
+		expect(out.images![1].caption).toBe(true);
+	});
+});
+
+describe("dropHeadingCaptions", () => {
+	const b = (images: BookImage[], toc: number[]): ParsedBook => ({
+		title: "Т",
+		author: "",
+		format: "txt",
+		paragraphs: ["Глава 1", "Текст", "Рис. 1"],
+		toc: toc.map((paragraph) => ({ title: "x", level: 0, paragraph })),
+		images,
+	});
+	it("снимает caption, если абзац at — заголовок; title остаётся", () => {
+		const out = dropHeadingCaptions(b([{ ...img(0, 1), caption: true, title: "Т" }, { ...img(2, 2), caption: true }], [0]));
+		expect("caption" in out.images![0]).toBe(false);
+		expect(out.images![0].title).toBe("Т");
+		expect(out.images![1].caption).toBe(true);
+	});
+	it("без рисунков и без подписей возвращает ту же книгу", () => {
+		const plain = b([img(2, 1)], [0]);
+		expect(dropHeadingCaptions(plain)).toBe(plain);
+		const none: ParsedBook = { ...plain, images: undefined };
+		expect(dropHeadingCaptions(none)).toBe(none);
 	});
 });

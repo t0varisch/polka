@@ -2,6 +2,7 @@
 // EPUB 2/3: текст по порядку spine, оглавление из nav или NCX, без сносок и служебных страниц.
 import JSZip from "jszip";
 import type { BookImage, ParsedBook, TocEntry } from "../types";
+import { allTextWrapped, applyCaptions } from "./captions";
 import { decodeMarkup } from "./decode";
 import { attrLocal, childByLocal, childrenByLocal, elementsByLocal, localOf, parseMarkup, parseXmlLoose } from "./dom";
 import { makeImage } from "./images";
@@ -150,7 +151,14 @@ const HAS_TEXT_RE = /[\p{L}\p{N}]/u;
 interface ImageRef {
 	at: number;
 	path: string;
+	/** Рисунок среди блоков (не внутри абзаца с текстом): только такой может иметь подпись */
+	block: boolean;
 }
+
+/** Класс элемента, которым вёрстка помечает подпись к рисунку. */
+const CAPTION_CLASS_RE = /caption|podpis|подпис|illus|image-?title|img-?title|fig-?title/i;
+// Обёртки, которыми выделяют подпись целиком
+const CAPTION_WRAP = new Set(["em", "i", "strong", "b"]);
 
 class Walker {
 	paragraphs: string[] = [];
@@ -158,6 +166,10 @@ class Walker {
 	fileStart = new Map<string, number>();
 	headings: Heading[] = [];
 	images: ImageRef[] = [];
+	/** Абзацы, которые книга сама пометила подписью (figcaption, класс caption, весь текст в em/strong) */
+	marked = new Set<number>();
+	/** Сколько элементов-подписей открыто сейчас: абзацы внутри них размечены */
+	private captionDepth = 0;
 	/** Ключ текущего файла */
 	path = "";
 	private buf = "";
@@ -168,12 +180,15 @@ class Walker {
 
 	constructor(private noteTargets: Set<string>) {}
 
-	private flush(): void {
+	private flush(marked = false): void {
 		if (!this.discard) {
 			const p = cleanParagraph(this.buf);
-			if (p) this.paragraphs.push(p);
+			if (p) {
+				if (marked || this.captionDepth > 0) this.marked.add(this.paragraphs.length);
+				this.paragraphs.push(p);
+			}
 		}
-		for (const path of this.pending) this.images.push({ at: this.paragraphs.length, path });
+		for (const path of this.pending) this.images.push({ at: this.paragraphs.length, path, block: false });
 		this.pending = [];
 		this.buf = "";
 		this.discard = false;
@@ -190,6 +205,7 @@ class Walker {
 		// от файла сносок остался один заголовок «Примечания» — убрать и его
 		if (this.paragraphs.length === start + 1 && NOTES_TITLE_RE.test(this.paragraphs[start])) {
 			this.paragraphs.pop();
+			this.marked.delete(this.paragraphs.length);
 			// рисунки этого файла не должны стоять за концом текста
 			for (let i = imagesStart; i < this.images.length; i++) this.images[i].at = Math.min(this.images[i].at, this.paragraphs.length);
 			this.headings = this.headings.filter((h) => h.paragraph < start);
@@ -213,7 +229,7 @@ class Walker {
 			if (!rel) continue;
 			const path = key(resolvePath(this.path, rel));
 			// в буфере ещё нет текста — рисунок перед следующим абзацем, иначе после текущего
-			if (!this.pending.length && !HAS_TEXT_RE.test(this.buf)) this.images.push({ at: this.paragraphs.length, path });
+			if (!this.pending.length && !HAS_TEXT_RE.test(this.buf)) this.images.push({ at: this.paragraphs.length, path, block: true });
 			else this.pending.push(path);
 		}
 	}
@@ -276,9 +292,12 @@ class Walker {
 		if (block) this.flush();
 		if (id) this.anchor(id);
 		const start = this.paragraphs.length;
+		const isCaption = block && (n === "figcaption" || CAPTION_CLASS_RE.test(el.getAttribute("class") ?? ""));
+		if (isCaption) this.captionDepth++;
 		for (const c of Array.from(el.childNodes)) this.walk(c);
 		if (block) {
-			this.flush();
+			this.flush(n === "p" && allTextWrapped(el, localOf, CAPTION_WRAP));
+			if (isCaption) this.captionDepth--;
 			if (HEADING_RE.test(n) && this.paragraphs.length > start) {
 				this.headings.push({ level: Number(n[1]), paragraph: start, title: this.paragraphs.slice(start).join(" ") });
 			}
@@ -572,16 +591,17 @@ export async function parseEpubZip(zip: JSZip, fileName = "", onProgress?: (f: n
 	}
 
 	// обложка из описания: если её нет среди рисунков текста — первой, с at 0
-	const refs = [...w.images];
+	const refs: ImageRef[] = [...w.images];
 	const coverItem =
 		items.find((it) => /(^|\s)cover-image(\s|$)/.test(it.properties)) ??
 		manifest.get(elementsByLocal(metadata, "meta").find((m) => m.getAttribute("name") === "cover")?.getAttribute("content") ?? "");
-	if (coverItem && !refs.some((r) => r.path === coverItem.path)) refs.unshift({ at: 0, path: coverItem.path });
+	if (coverItem && !refs.some((r) => r.path === coverItem.path)) refs.unshift({ at: 0, path: coverItem.path, block: false });
 
 	// файлы читаем после обхода: обход синхронный, чтение из архива — нет
 	const mediaTypes = new Map(items.map((it) => [it.path, it.mediaType]));
 	const loaded = new Map<string, Uint8Array | null>();
 	const images: BookImage[] = [];
+	const blocks: boolean[] = [];
 	for (const r of refs) {
 		if (!loaded.has(r.path)) {
 			let data: Uint8Array | null = null;
@@ -594,8 +614,12 @@ export async function parseEpubZip(zip: JSZip, fileName = "", onProgress?: (f: n
 			loaded.set(r.path, data);
 		}
 		const im = makeImage(r.at, loaded.get(r.path) ?? null, mediaTypes.get(r.path) ?? "");
-		if (im) images.push(im);
+		if (im) {
+			images.push(im);
+			blocks.push(r.block);
+		}
 	}
+	applyCaptions(images, blocks, w.paragraphs, w.marked, new Set([...w.headings.map((h) => h.paragraph), ...toc.map((e) => e.paragraph)]));
 
 	return {
 		title: title || titleFromFileName(fileName),

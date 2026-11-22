@@ -294,3 +294,102 @@ describe("EPUB: рисунки", () => {
 		expect(book.images!.map((i) => i.at)).toEqual([0, 2, 3, 3, 4, 4]);
 	});
 });
+
+// ---------- подписи к рисункам ----------
+
+/** Одна глава с рисунками и подписями разного вида; рисунки a, b, c — одна PNG. */
+function epubWithCaptionsFiles(body: string): Record<string, string | Uint8Array> {
+	const png = decodeBase64(PNG_1X1_BASE64)!;
+	return {
+		mimetype: "application/epub+zip",
+		"META-INF/container.xml": CONTAINER,
+		"OEBPS/content.opf": `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:3</dc:identifier><dc:title>С подписями</dc:title></metadata>
+<manifest>
+<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+<item id="a" href="a.png" media-type="image/png"/>
+</manifest>
+<spine><itemref idref="ch1"/></spine>
+</package>`,
+		"OEBPS/ch1.xhtml": `${XHTML_HEAD}<head><title>x</title></head><body>${body}</body></html>`,
+		"OEBPS/a.png": png,
+	};
+}
+
+describe("EPUB: подписи к рисункам", () => {
+	const LONG = "Это длинный подписанный текст рисунка, который длиннее восьмидесяти знаков и заканчивается точкой, как обычное предложение.";
+	const parse = async (body: string) => parseEpub(await makeZip(epubWithCaptionsFiles(body), true), "c.epub");
+	const flags = (b: { images?: { at: number; caption?: boolean }[] }) => b.images!.map((i) => [i.at, i.caption ?? false]);
+
+	it("figure > img + figcaption — подпись, даже длинная", async () => {
+		const b = await parse(`<p>Текст.</p><figure><img src="a.png"/><figcaption>${LONG}</figcaption></figure><p>Дальше.</p>`);
+		expect(b.paragraphs).toEqual(["Текст.", LONG, "Дальше."]);
+		expect(flags(b)).toEqual([[1, true]]);
+	});
+
+	it("figcaption с вложенным p внутри — тоже подпись", async () => {
+		const b = await parse(`<p>Текст.</p><figure><img src="a.png"/><figcaption><p>${LONG}</p></figcaption></figure>`);
+		expect(flags(b)).toEqual([[1, true]]);
+	});
+
+	it("p с классом caption — подпись; обычный p такой же длины — нет", async () => {
+		const marked = await parse(`<p>Текст.</p><p><img src="a.png"/></p><p class="caption">${LONG}</p>`);
+		expect(flags(marked)).toEqual([[1, true]]);
+		const plain = await parse(`<p>Текст.</p><p><img src="a.png"/></p><p>${LONG}</p>`);
+		expect(flags(plain)).toEqual([[1, false]]);
+	});
+
+	it("p целиком в em/i/strong/b — подпись", async () => {
+		for (const tag of ["em", "i", "strong", "b"]) {
+			const b = await parse(`<p>Текст.</p><p><img src="a.png"/></p><p><${tag}>${LONG}</${tag}></p>`);
+			expect(flags(b), tag).toEqual([[1, true]]);
+		}
+		const half = await parse(`<p>Текст.</p><p><img src="a.png"/></p><p><em>Начало</em> ${LONG}</p>`);
+		expect(flags(half)).toEqual([[1, false]]);
+	});
+
+	it("«Рис. 1» и короткая строка без разметки — подпись; предложение с точкой — нет", async () => {
+		expect(flags(await parse(`<p>Текст.</p><p><img src="a.png"/></p><p>Рис. 1</p>`))).toEqual([[1, true]]);
+		expect(flags(await parse(`<p>Текст.</p><p><img src="a.png"/></p><p>Пример подушки</p>`))).toEqual([[1, true]]);
+		expect(flags(await parse(`<p>Текст.</p><p><img src="a.png"/></p><p>Оцените свой сон.</p>`))).toEqual([[1, false]]);
+	});
+
+	it("рисунок внутри абзаца с текстом подписи не получает", async () => {
+		const b = await parse(`<p>Раньше <img src="a.png"/> позже.</p><p>Рис. 1</p>`);
+		expect(flags(b)).toEqual([[1, false]]);
+	});
+
+	it("заголовок h2 сразу после рисунка — не подпись", async () => {
+		const b = await parse(`<p>Текст.</p><p><img src="a.png"/></p><h2>Глава</h2><p>Дальше.</p>`);
+		expect(b.paragraphs[1]).toBe("Глава");
+		expect(flags(b)).toEqual([[1, false]]);
+	});
+
+	it("из двух рисунков перед абзацем подпись у последнего", async () => {
+		const b = await parse(`<p>Текст.</p><p><img src="a.png"/></p><p><img src="a.png"/></p><p>Рис. 1</p>`);
+		expect(flags(b)).toEqual([[1, false], [1, true]]);
+	});
+
+	it("alt в подпись не идёт и подписью не считается", async () => {
+		const b = await parse(`<p>Текст.</p><p><img src="a.png" alt="Рис. 1"/></p><p>Тут идёт обычное предложение, которое точно не подпись.</p>`);
+		expect(flags(b)).toEqual([[1, false]]);
+		for (const i of b.images!) expect("title" in i).toBe(false);
+	});
+
+	it("paragraphs и toc не зависят от подписей и рисунков", async () => {
+		const body = `<h1>Глава</h1><figure><img src="a.png"/><figcaption>${LONG}</figcaption></figure><p>Дальше.</p>`;
+		const withPics = await parse(body);
+		const noPics = await parse(body.replace(/<img[^>]*>/g, ""));
+		expect(noPics.images).toBeUndefined();
+		expect(withPics.paragraphs).toEqual(noPics.paragraphs);
+		expect(withPics.toc).toEqual(noPics.toc);
+	});
+
+	it("обложка из манифеста подписи не получает", async () => {
+		const files = epubWithCaptionsFiles(`<p>Рис. 1</p>`);
+		files["OEBPS/content.opf"] = (files["OEBPS/content.opf"] as string).replace(`<item id="a" href="a.png" media-type="image/png"/>`, `<item id="a" href="a.png" media-type="image/png" properties="cover-image"/>`);
+		const b = await parseEpub(await makeZip(files, true), "c.epub");
+		expect(flags(b)).toEqual([[0, false]]);
+	});
+});

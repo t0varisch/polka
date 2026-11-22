@@ -1,5 +1,18 @@
 // Общая доводка книги после разбора: убрать напечатанное оглавление («Содержание» со списком глав).
-import type { ParsedBook, TocEntry } from "../types";
+import type { BookImage, ParsedBook, TocEntry } from "../types";
+
+/** Рисунок без подписи-абзаца: title (подпись из атрибута) остаётся. */
+function withoutCaption(im: BookImage): BookImage {
+	const { caption: _caption, ...rest } = im;
+	return rest;
+}
+
+/** Абзац, ставший заголовком (в том числе найденным после detectToc), подписью не считается: caption снимается. */
+export function dropHeadingCaptions(book: ParsedBook): ParsedBook {
+	if (!book.images?.some((im) => im.caption)) return book;
+	const heads = new Set(book.toc.map((e) => e.paragraph));
+	return { ...book, images: book.images.map((im) => (im.caption && heads.has(im.at) ? withoutCaption(im) : im)) };
+}
 
 const TOC_HEAD_RE = /^(содержание|оглавление|contents|table of contents)\.?$/i;
 const PAGE_REF_RE = /[\s.…·_]+(\d{1,4}|[ivxlcdm]{1,7})$/i;
@@ -77,7 +90,11 @@ export function dropPrintedToc(book: ParsedBook): ParsedBook {
 	// рисунок стоит перед абзацем at: уходит на число выброшенных абзацев левее него
 	if (book.images) {
 		const left = (at: number) => (at >= paragraphs.length ? removed : shift[at]);
-		out.images = book.images.map((im) => ({ ...im, at: im.at - left(im.at) }));
+		// подпись-абзац выброшен — флага больше нет (title остаётся)
+		out.images = book.images.map((im) => {
+			const moved = { ...im, at: im.at - left(im.at) };
+			return im.caption && drop.has(im.at) ? withoutCaption(moved) : moved;
+		});
 	}
 	return out;
 }

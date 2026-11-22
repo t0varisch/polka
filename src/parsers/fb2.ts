@@ -3,6 +3,7 @@ import type { BookImage, ParsedBook, TocEntry } from "../types";
 import { decodeMarkup } from "./decode";
 import { attrLocal, localOf, repairXml, tryParseXml } from "./dom";
 import { joinTitleLines } from "./headings";
+import { allTextWrapped, applyCaptions } from "./captions";
 import { decodeBase64, makeImage } from "./images";
 import { BookParseError, ERR_EMPTY, GAP, cleanParagraph, isNoteMarker, titleFromFileName } from "./util";
 
@@ -12,6 +13,16 @@ type Ln = (el: Element) => string;
 interface ImageRef {
 	id: string;
 	at: number;
+	/** Рисунок среди блоков (не внутри абзаца): только такой может иметь подпись */
+	block: boolean;
+	/** Атрибут title у image */
+	title?: string;
+}
+
+/** Рисунок внутри абзаца, ещё без места. */
+interface HeldImage {
+	id: string;
+	title?: string;
 }
 
 interface Ctx {
@@ -23,13 +34,19 @@ interface Ctx {
 	/** Рисунки, уже получившие место */
 	refs: ImageRef[];
 	/** Рисунки внутри абзаца: место — после него, назначается при выпуске абзаца */
-	pending: string[];
+	pending: HeldImage[];
+	/** Абзацы, которые книга сама пометила подписью (subtitle, весь текст в emphasis/strong) */
+	marked: Set<number>;
+	/** Абзацы заголовков секций: подписью не бывают */
+	headings: Set<number>;
 }
 
 // Строчные элементы: текст идёт в текущий абзац
 const INLINE = new Set(["strong", "emphasis", "style", "strikethrough", "sub", "sup", "code", "a", "span", "b", "i", "u", "em", "small"]);
 // Никогда не читаем
 const SKIP = new Set(["image", "binary", "description", "stylesheet", "empty-line", "img", "script"]);
+// Обёртки, которыми книга выделяет подпись целиком
+const CAPTION_WRAP = new Set(["emphasis", "strong", "em", "b", "i"]);
 // Блоки с одним абзацем текста
 const TEXT_BLOCKS = new Set(["p", "v", "subtitle", "text-author", "date", "td", "th"]);
 
@@ -155,22 +172,38 @@ const HAS_TEXT_RE = /[\p{L}\p{N}]/u;
 /** Рисунок внутри абзаца: встанет после него, когда абзац выйдет (или не выйдет — пустой). */
 function holdImage(img: Element, ctx: Ctx): void {
 	const id = hrefTarget(img);
-	if (id) ctx.pending.push(id);
+	if (id) ctx.pending.push({ id, title: imageTitle(img) });
+}
+
+/** Атрибут title у image: непустой текст после чистки. */
+function imageTitle(img: Element): string | undefined {
+	return cleanParagraph(img.getAttribute("title") ?? "") || undefined;
 }
 
 /** Рисунок среди блоков: если в буфере ещё нет текста — перед следующим абзацем, иначе после текущего. */
 function placeImage(img: Element, ctx: Ctx, buf: string): void {
 	const id = hrefTarget(img);
 	if (!id) return;
-	if (!ctx.pending.length && !HAS_TEXT_RE.test(buf)) ctx.refs.push({ id, at: ctx.paragraphs.length });
-	else ctx.pending.push(id);
+	const title = imageTitle(img);
+	if (!ctx.pending.length && !HAS_TEXT_RE.test(buf)) ctx.refs.push({ id, at: ctx.paragraphs.length, block: true, title });
+	else ctx.pending.push({ id, title });
 }
 
-function emit(ctx: Ctx, text: string): void {
+/** marked — абзац размечен в книге как подпись; запоминается по номеру, текст не меняется. */
+function emit(ctx: Ctx, text: string, marked = false): void {
 	const p = cleanParagraph(text);
-	if (p) ctx.paragraphs.push(p);
-	for (const id of ctx.pending) ctx.refs.push({ id, at: ctx.paragraphs.length });
+	if (p) {
+		if (marked) ctx.marked.add(ctx.paragraphs.length);
+		ctx.paragraphs.push(p);
+	}
+	for (const h of ctx.pending) ctx.refs.push({ id: h.id, at: ctx.paragraphs.length, block: false, title: h.title });
 	ctx.pending = [];
+}
+
+/** subtitle или p, весь текст которого выделен emphasis/strong. */
+function isMarkedBlock(el: Element, ctx: Ctx): boolean {
+	const n = ctx.ln(el);
+	return n === "subtitle" || (n === "p" && allTextWrapped(el, ctx.ln, CAPTION_WRAP));
 }
 
 /** Секция — сноска (цель ссылки type="note") или обёртка из одних сносок. */
@@ -192,6 +225,7 @@ function walkSection(sec: Element, ctx: Ctx, depth: number): void {
 		const start = ctx.paragraphs.length;
 		walkMixed(title, ctx, depth, null);
 		const lines = ctx.paragraphs.slice(start);
+		for (let i = start; i < ctx.paragraphs.length; i++) ctx.headings.add(i);
 		if (lines.length) {
 			ctx.toc.push({ title: joinTitleLines(lines), level: depth, paragraph: start });
 			inner = depth + 1;
@@ -225,7 +259,7 @@ function walkMixed(el: Element, ctx: Ctx, depth: number, skip: Element | null): 
 		emit(ctx, buf);
 		buf = "";
 		if (n === "section") walkSection(c, ctx, depth);
-		else if (TEXT_BLOCKS.has(n)) emit(ctx, inlineText(c, ctx));
+		else if (TEXT_BLOCKS.has(n)) emit(ctx, inlineText(c, ctx), isMarkedBlock(c, ctx));
 		// title вне секции, epigraph, cite, poem, stanza, annotation, table, tr, неизвестные
 		else walkMixed(c, ctx, depth, null);
 	}
@@ -277,16 +311,17 @@ export function parseFb2String(xml: string, fileName = ""): ParsedBook {
 	});
 	if (!main.length && bodies.length) main.push(bodies[0]);
 
-	const ctx: Ctx = { ln, paragraphs: [], toc: [], noteIds, refs: [], pending: [] };
+	const ctx: Ctx = { ln, paragraphs: [], toc: [], noteIds, refs: [], pending: [], marked: new Set(), headings: new Set() };
 	for (const body of main) walkMixed(body, ctx, 0, null);
 	if (!ctx.paragraphs.length) throw new BookParseError(ERR_EMPTY);
 
 	// обложка — первый image в coverpage; если этот же рисунок есть в тексте, отдельно не нужна
 	const coverImg = firstDesc(firstDesc(info, "coverpage", ln), "image", ln);
 	const coverId = coverImg ? hrefTarget(coverImg) : null;
-	if (coverId && !ctx.refs.some((r) => r.id === coverId)) ctx.refs.unshift({ id: coverId, at: 0 });
+	if (coverId && !ctx.refs.some((r) => r.id === coverId)) ctx.refs.unshift({ id: coverId, at: 0, block: false });
 
 	const images: BookImage[] = [];
+	const blocks: boolean[] = [];
 	const decoded = new Map<string, Uint8Array | null>();
 	for (const r of ctx.refs) {
 		const bin = binaries.get(r.id);
@@ -294,8 +329,13 @@ export function parseFb2String(xml: string, fileName = ""): ParsedBook {
 		// base64 декодируем только для рисунков, на которые есть ссылки
 		if (!decoded.has(r.id)) decoded.set(r.id, decodeBase64(bin.base64));
 		const im = makeImage(r.at, decoded.get(r.id) ?? null, bin.type);
-		if (im) images.push(im);
+		if (im) {
+			if (r.title) im.title = r.title;
+			images.push(im);
+			blocks.push(r.block);
+		}
 	}
+	applyCaptions(images, blocks, ctx.paragraphs, ctx.marked, new Set([...ctx.headings, ...ctx.toc.map((e) => e.paragraph)]));
 
 	return {
 		title: title || titleFromFileName(fileName),

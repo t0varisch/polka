@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseFb2, parseFb2String } from "./fb2";
 import { parseFile } from "./index";
-import { PNG_1X1_BASE64, encodeSingleByte, fb2WithImages, fileFrom, makeZip, utf8 } from "./test-fixtures";
+import { PNG_1X1_BASE64, encodeSingleByte, fb2WithCaptions, fb2WithImages, fileFrom, makeZip, utf8 } from "./test-fixtures";
 
 const BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".repeat(40);
 
@@ -243,5 +243,78 @@ describe("FB2: рисунки", () => {
 
 	it("книга без рисунков не получает images", () => {
 		expect(parseFb2String(withoutImages(fb2WithImages())).images).toBeUndefined();
+	});
+});
+
+describe("FB2: подписи к рисункам", () => {
+	const book = parseFb2String(fb2WithCaptions());
+	const byAt = (at: number) => book.images!.filter((i) => i.at === at);
+
+	it("subtitle под рисунком — подпись, даже длинная", () => {
+		expect(byAt(2).map((i) => i.caption)).toEqual([true]);
+	});
+
+	it("<p><emphasis>…</emphasis></p> под рисунком — подпись, даже длинная", () => {
+		expect(book.paragraphs[4].length).toBeGreaterThan(80);
+		expect(byAt(4).map((i) => i.caption)).toEqual([true]);
+	});
+
+	it("«Рис. 2» обычным <p> — подпись", () => {
+		expect(book.paragraphs[6]).toBe("Рис. 2");
+		expect(byAt(6).map((i) => i.caption)).toEqual([true]);
+	});
+
+	it("длинный обычный абзац после рисунка — не подпись", () => {
+		expect(byAt(8).length).toBe(1);
+		expect("caption" in byAt(8)[0]).toBe(false);
+	});
+
+	it("атрибут title: текст остаётся на рисунке, в абзацы не попадает", () => {
+		expect(byAt(9).map((i) => i.title)).toEqual(["Схема сна"]);
+		expect("caption" in byAt(9)[0]).toBe(false);
+		expect(book.paragraphs.join("\n")).not.toContain("Схема сна");
+		// без title — поля нет
+		expect("title" in byAt(8)[0]).toBe(false);
+	});
+
+	it("рисунок внутри абзаца подписи не получает, хотя дальше стоит «Рис. 3»", () => {
+		expect(book.paragraphs[11]).toBe("Рис. 3");
+		expect(byAt(11).length).toBe(1);
+		expect("caption" in byAt(11)[0]).toBe(false);
+	});
+
+	it("заголовок главы сразу после рисунка — не подпись", () => {
+		expect(book.paragraphs[12]).toBe("Глава 2");
+		expect(byAt(12).length).toBe(1);
+		expect("caption" in byAt(12)[0]).toBe(false);
+	});
+
+	it("из двух рисунков перед одним абзацем подпись у последнего; title первого остаётся", () => {
+		const two = byAt(13);
+		expect(two.length).toBe(2);
+		expect("caption" in two[0]).toBe(false);
+		expect(two[1].caption).toBe(true);
+		expect(two[1].title).toBe("Вторая");
+	});
+
+	it("рисунок в самом конце (at === length) подписи не получает", () => {
+		const xml = fb2WithCaptions().replace("</section></section></body>", `<image l:href="#pic10"/></section></section></body>`);
+		const b = parseFb2String(xml);
+		expect(b.images!.at(-1)!.at).toBe(b.paragraphs.length);
+		expect("caption" in b.images!.at(-1)!).toBe(false);
+	});
+
+	it("paragraphs и toc те же, что у разбора без рисунков", () => {
+		const bare = parseFb2String(fb2WithCaptions().replace(/<image[^>]*>/g, "").replace(/<binary[\s\S]*?<\/binary>/g, ""));
+		expect(bare.images).toBeUndefined();
+		expect(book.paragraphs).toEqual(bare.paragraphs);
+		expect(book.toc).toEqual(bare.toc);
+	});
+
+	it("обычные рисунки (fb2WithImages) полей caption и title не получают", () => {
+		for (const im of parseFb2String(fb2WithImages()).images!) {
+			expect("caption" in im).toBe(false);
+			expect("title" in im).toBe(false);
+		}
 	});
 });
