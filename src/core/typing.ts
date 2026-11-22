@@ -179,12 +179,28 @@ export class TypingStats {
 	errors = 0;
 	activeMs = 0;
 	private last = 0;
+	/** Буква, на которой уже записан промах; -1 — такой нет */
+	private missedAt = -1;
 
-	hit(ok: boolean, now: number): void {
+	/**
+	 * Нажатие. at — номер буквы в тексте: промахи подряд на одной букве — одна ошибка
+	 * (просьба Романа 22.11.2026: «один раз промахнулся — одна ошибка»). Без at каждый промах — ошибка.
+	 */
+	hit(ok: boolean, now: number, at?: number): void {
 		if (this.last && now - this.last < IDLE_MS) this.activeMs += now - this.last;
 		this.last = now;
-		if (ok) this.correct++;
-		else this.errors++;
+		if (ok) {
+			this.correct++;
+			this.missedAt = -1;
+		} else if (at === undefined || at !== this.missedAt) {
+			this.errors++;
+			this.missedAt = at ?? -1;
+		}
+	}
+
+	/** Перешли в другое место книги: следующий промах — новая ошибка, даже на той же букве */
+	forgetMiss(): void {
+		this.missedAt = -1;
 	}
 
 	/** Знаков в минуту (только верные нажатия). */

@@ -182,7 +182,7 @@ export const typingMode: ModeFactory = async (host: ModeHost, startWord: number)
 		const expected = text[pos];
 		const now = performance.now();
 		if (matches(expected, ch, opts)) {
-			session.hit(true, now);
+			session.hit(true, now, pos);
 			const from = pos;
 			pos = nextRequired(text, pos + 1, opts);
 			remaining = Math.max(0, remaining - 1);
@@ -198,7 +198,8 @@ export const typingMode: ModeFactory = async (host: ModeHost, startWord: number)
 				toast("Книга напечатана");
 			}
 		} else {
-			session.hit(false, now);
+			// промах на той же букве ещё раз — подсветка и звук, но ошибка уже записана
+			session.hit(false, now, pos);
 			const cur = spanAt(pos);
 			if (cur) {
 				cur.classList.remove("err");
@@ -355,6 +356,7 @@ export const typingMode: ModeFactory = async (host: ModeHost, startWord: number)
 		word: () => map.charToWord(pos),
 		seek(word) {
 			pos = nextRequired(text, map.wordToChar(word), opts);
+			session.forgetMiss();
 			remaining = remainingRequired(text, pos, opts);
 			curWord = map.charToWord(pos);
 			renderWindow();

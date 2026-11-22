@@ -201,6 +201,28 @@ async function browserFlow(W, H, tag) {
 		step(wt === wp + 2, `${tag} браузер: напечатано 2 слова`, `${wp} -> ${wt}`);
 		await shot("5-typing");
 
+		// промахи подряд на одной букве — одна ошибка: точность после второго и третьего промаха не падает
+		{
+			const acc = () =>
+				page.evaluate(() => {
+					const st = [...document.querySelectorAll(".mode-typing .stat")].find((d) => d.querySelector("small")?.textContent === "точность");
+					return st?.querySelector("b")?.textContent ?? "";
+				});
+			const cur = await page.evaluate(() => document.querySelector(".mode-typing .tape span.cur")?.textContent ?? "");
+			const wrong = /[ъЪ]/.test(cur) ? "ж" : "ъ";
+			await page.keyboard.type(wrong);
+			await page.waitForTimeout(150);
+			const a1 = await acc();
+			await page.keyboard.type(wrong + wrong, { delay: 30 });
+			await page.waitForTimeout(150);
+			const a3 = await acc();
+			step(a1 !== "100,0%" && a1 === a3, `${tag} браузер: три промаха на одной букве — одна ошибка`, `${a1} -> ${a3}`);
+			await page.keyboard.type(cur === "¶" ? "\n" : cur);
+			await page.waitForTimeout(150);
+			const a4 = await acc();
+			step((await dw(page)) >= wt && a4 !== a3, `${tag} браузер: после верной буквы точность пересчитана`, `${a3} -> ${a4}`);
+		}
+
 		await toMode(page, "pages", ".pg-content span[data-w]");
 		step((await onOpenPage(page)) && (await dw(page)) === wt, `${tag} браузер: «Страницы», слово на открытой странице`, `слово ${await dw(page)}`);
 		await shot("6-pages-back");

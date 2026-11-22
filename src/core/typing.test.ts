@@ -67,6 +67,52 @@ describe("скорость", () => {
 	});
 });
 
+describe("ошибки", () => {
+	it("промахи подряд на одной букве — одна ошибка", () => {
+		const s = new TypingStats();
+		// нужна «б»: «в», «в», «в», потом «б»
+		s.hit(false, 1000, 5);
+		s.hit(false, 1100, 5);
+		s.hit(false, 1200, 5);
+		s.hit(true, 1300, 5);
+		expect(s.errors).toBe(1);
+		expect(s.correct).toBe(1);
+	});
+
+	it("промах на следующей букве — новая ошибка", () => {
+		const s = new TypingStats();
+		s.hit(false, 1000, 5);
+		s.hit(true, 1100, 5);
+		s.hit(false, 1200, 6);
+		s.hit(false, 1300, 6);
+		s.hit(true, 1400, 6);
+		expect(s.errors).toBe(2);
+	});
+
+	it("после перехода в другое место промах на той же букве снова считается", () => {
+		const s = new TypingStats();
+		s.hit(false, 1000, 5);
+		s.forgetMiss();
+		s.hit(false, 1100, 5);
+		expect(s.errors).toBe(2);
+	});
+
+	it("повторные промахи считаются временем печати", () => {
+		const s = new TypingStats();
+		s.hit(false, 1000, 5);
+		s.hit(false, 1500, 5);
+		s.hit(true, 2000, 5);
+		expect(s.activeMs).toBe(1000);
+	});
+
+	it("без номера буквы каждый промах — ошибка, как раньше", () => {
+		const s = new TypingStats();
+		s.hit(false, 1000);
+		s.hit(false, 1100);
+		expect(s.errors).toBe(2);
+	});
+});
+
 describe("скорость нормализации", () => {
 	it("миллион символов — быстрее 1500 мс", () => {
 		const para = "«Привет», — сказал он… тут и  там ".repeat(3).slice(0, 100).padEnd(100, "я");
