@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BookImage } from "../types";
 import type { Chunk } from "./chunks";
-import { fitSize, imagesByChunk } from "./figures";
+import { fitSize, imagesByChunk, maxImageHeight } from "./figures";
 
 const chunks: Chunk[] = [
 	{ fromPara: 0, toPara: 10, fromWord: 0, toWord: 100 },
@@ -31,6 +31,27 @@ describe("imagesByChunk", () => {
 	});
 	it("без кусков — пусто", () => {
 		expect(imagesByChunk([], [img(1)], 0)).toEqual([]);
+	});
+});
+
+describe("maxImageHeight", () => {
+	it("короткая подпись: рисунок целыми строками, вместе с подписью не выше колонки", () => {
+		const m = maxImageHeight(600, 30, 60) as number;
+		expect(m % 30).toBe(0);
+		expect(m + 60).toBeLessThanOrEqual(600);
+		expect(m).toBeGreaterThanOrEqual(480);
+	});
+	it("длинная подпись (5 строк): рисунок уменьшается до остатка колонки", () => {
+		const m = maxImageHeight(600, 30, 150) as number;
+		expect(m).toBe(420);
+	});
+	it("рисунок не меньше 3 строк", () => {
+		expect(maxImageHeight(600, 30, 510)).toBe(90);
+		expect(maxImageHeight(600, 30, 500)).toBe(90);
+		expect(maxImageHeight(600, 30, 511)).toBe(null);
+	});
+	it("подпись выше (колонка − 3 строки) — null, фигура может разорваться", () => {
+		expect(maxImageHeight(600, 30, 520)).toBe(null);
 	});
 });
 

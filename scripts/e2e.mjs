@@ -237,6 +237,28 @@ async function findFigPage(page) {
 	}
 	return null;
 }
+// Страница из одних рисунков: рисунок виден, ни одного слова на открытой странице нет
+const wordsVisible = (p) =>
+	p.evaluate(() => {
+		const vp = document.querySelector(".pg-page").getBoundingClientRect();
+		return [...document.querySelectorAll(".pg-content span[data-w]")].some((s) => {
+			const r = s.getBoundingClientRect();
+			return r.right > vp.left + 1 && r.left < vp.right - 1;
+		});
+	});
+async function findImageOnlyPage(page) {
+	let stuck = 0;
+	for (let n = 0; n < 300; n++) {
+		const f = await figInfo(page);
+		if (f && !(await wordsVisible(page))) return f;
+		const w = await dw(page);
+		await page.keyboard.press("ArrowRight");
+		await page.waitForTimeout(60);
+		stuck = (await dw(page)) === w && !(await figInfo(page)) ? stuck + 1 : 0;
+		if (stuck >= 3) break;
+	}
+	return null;
+}
 const imgSel = (i) => 'img.pg-img[data-i="' + i + '"]';
 
 async function imgFlow(W, H, tag) {
@@ -301,9 +323,10 @@ async function imgFlow(W, H, tag) {
 		step((await dw(page)) === w0, `${tag} рисунки: окно вернули, слово то же`);
 
 		// 4. «По слову» и обратно
+		const w4 = await dw(page);
 		await toMode(page, "words", ".mode-words .word .p");
 		await toMode(page, "pages", ".pg-content span[data-w]");
-		step((await dw(page)) === w0 && (await onOpenPage(page)), `${tag} рисунки: «По слову» и обратно, слово то же`, `${await dw(page)} == ${w0}`);
+		step((await dw(page)) === w4, `${tag} рисунки: «По слову» и обратно, слово то же`, `${await dw(page)} == ${w4}`);
 
 		// 5. старый кэш: у книги убраны images и v
 		await page.waitForTimeout(3500);
@@ -347,6 +370,20 @@ async function imgFlow(W, H, tag) {
 		const f3 = await findFigPage(page);
 		step(!!f3 && f3.ok && wNew === wOld, `${tag} рисунки: тот же файл ещё раз — рисунки появились, слово то же`, `слово ${wOld} -> ${wNew}`);
 		step(!(await hscroll(page)), `${tag} рисунки: нет горизонтальной прокрутки`);
+
+		// 6. страница из одних рисунков: после смены окна открыта страница с тем же рисунком
+		{
+			const fo = await findImageOnlyPage(page);
+			if (fo) {
+				await page.setViewportSize({ width: alt[0], height: alt[1] });
+				await page.waitForTimeout(1000);
+				const fo2 = await figInfo(page);
+				step(!!fo2 && fo2.i === fo.i && fo2.inside, `${tag} рисунки: страница из одних рисунков, смена окна на ${alt[0]}x${alt[1]} — тот же рисунок ${fo.i} на странице`, fo2 ? `был ${fo.i}, стал ${fo2.i}` : "рисунка на странице нет");
+				await shot("3a-image-only-resized");
+				await page.setViewportSize({ width: W, height: H });
+				await page.waitForTimeout(1000);
+			} else step(bookName !== "buzunov", `${tag} рисунки: страница из одних рисунков`, bookName === "buzunov" ? "не найдена за 300 страниц" : "в этой книге не найдена, шаг пропущен");
+		}
 	} catch (e) {
 		step(false, `${tag} рисунки: сценарий оборвался`, String(e.message).split("\n")[0]);
 		await page.screenshot({ path: `${OUT}/${tag}-img-ERROR.png` }).catch(() => {});

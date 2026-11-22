@@ -2,7 +2,7 @@
 // Место в книге — первое слово открытой страницы.
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
-import { fitSize, imagesByChunk } from "../../core/figures";
+import { fitSize, imagesByChunk, maxImageHeight } from "../../core/figures";
 import type { FontKind, Settings } from "../../settings";
 import { formatDuration, h, iconButton } from "../dom";
 import { FONT_OPTIONS, range, segmented, toggle } from "../settings-sheet";
@@ -80,7 +80,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	let colH = 0;
 	let lineH = 0;
 	/** Рисунки открытого куска: общий номер и элемент. */
-	let figs: { idx: number; img: HTMLImageElement }[] = [];
+	let figs: { idx: number; img: HTMLImageElement; box: HTMLElement; cap: HTMLElement | null }[] = [];
 	/** Страницы открытого куска без начала слова. */
 	let wordless: boolean[] = [];
 	/** Первый рисунок страницы (общий номер) и страница рисунка. */
@@ -184,14 +184,34 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		img.src = objectUrl(ix);
 		const box = h("div.pg-imgbox", {}, img);
 		// Высота блока — целое число строк, но не больше колонки (иначе Chrome уводит картинку в соседнюю колонку)
-		const boxH = Math.min(Math.max(1, Math.ceil(size.h / lineH)) * lineH, colH - 0.5);
-		box.style.height = `${boxH}px`;
-		img.style.marginTop = `${Math.max(0, Math.floor((boxH - size.h) / 2))}px`;
 		const fig = h("figure.pg-fig", {}, box);
 		if (cap) fig.append(cap);
 		else if (im.title) fig.append(h("div.pg-cap", {}, im.title));
-		figs.push({ idx: ix, img });
+		const f = { idx: ix, img, box, cap: cap ?? (fig.querySelector(".pg-cap") as HTMLElement | null) };
+		sizeFigure(f, size);
+		figs.push(f);
 		return fig;
+	}
+
+	/** Размер картинки и высота блока: целое число строк, но не больше колонки (иначе Chrome уводит картинку в соседнюю колонку). */
+	function sizeFigure(f: { img: HTMLImageElement; box: HTMLElement }, size: { w: number; h: number }): void {
+		f.img.style.width = `${size.w}px`;
+		f.img.style.height = `${size.h}px`;
+		const boxH = Math.min(Math.max(1, Math.ceil(size.h / lineH)) * lineH, colH - 0.5);
+		f.box.style.height = `${boxH}px`;
+		f.img.style.marginTop = `${Math.max(0, Math.floor((boxH - size.h) / 2))}px`;
+	}
+
+	/** Подпись выше резерва в 2 строки: рисунок уменьшается, чтобы вместе с подписью уместиться в колонку. */
+	function fitCaptions(): void {
+		for (const f of figs) {
+			if (!f.cap) continue;
+			const d = dims[f.idx] as { w: number; h: number };
+			const maxH = maxImageHeight(colH, lineH, f.cap.offsetHeight);
+			if (maxH === null) continue;
+			const size = fitSize(d.w, d.h, colW, maxH);
+			if (size.h < f.img.offsetHeight) sizeFigure(f, size);
+		}
 	}
 
 	function renderChunk(i: number): void {
@@ -237,6 +257,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		}
 		content.replaceChildren(frag);
 		chunkIdx = i;
+		fitCaptions();
 	}
 
 	/** Страницы куска (слова и рисунки), первое слово каждой страницы. */

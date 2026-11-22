@@ -28,6 +28,15 @@ export function imagesByChunk(chunks: Chunk[], images: BookImage[], paraCount: n
 	return out;
 }
 
+/**
+ * Наибольшая высота рисунка при подписи высотой capH: подпись и рисунок вместе не выше колонки,
+ * рисунок не ниже 3 строк. Подпись длиннее (колонка − 3 строки) — null: фигура может разорваться.
+ */
+export function maxImageHeight(colH: number, lineH: number, capH: number): number | null {
+	if (capH > colH - 3 * lineH) return null;
+	return Math.max(3 * lineH, Math.floor((colH - capH - 0.5) / lineH) * lineH);
+}
+
 /** Уменьшает с сохранением пропорций, не увеличивает; целые пиксели, не меньше 1. */
 export function fitSize(w: number, h: number, maxW: number, maxH: number): { w: number; h: number } {
 	if (!(w > 0) || !(h > 0)) return { w: 1, h: 1 };
