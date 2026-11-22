@@ -297,6 +297,13 @@ describe("FB2: подписи к рисункам", () => {
 		expect(two[1].title).toBe("Вторая");
 	});
 
+	it("рисунок в начале книги (at 0) подписи не получает, даже перед «Рис. 1»", () => {
+		const xml = `<FictionBook xmlns:l="http://www.w3.org/1999/xlink"><body><section><image l:href="#a"/><p>Рис. 1</p><p>Текст.</p></section></body><binary id="a" content-type="image/png">${PNG_1X1_BASE64}</binary></FictionBook>`;
+		const b = parseFb2String(xml);
+		expect(b.images!.map((i) => i.at)).toEqual([0]);
+		expect("caption" in b.images![0]).toBe(false);
+	});
+
 	it("рисунок в самом конце (at === length) подписи не получает", () => {
 		const xml = fb2WithCaptions().replace("</section></section></body>", `<image l:href="#pic10"/></section></section></body>`);
 		const b = parseFb2String(xml);

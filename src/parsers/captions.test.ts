@@ -52,22 +52,27 @@ function im(at: number): BookImage {
 describe("applyCaptions", () => {
 	const paras = ["Рис. 1", "Текст.", "Пример подушки", "Рис. 2"];
 	it("ставит caption только блочному рисунку", () => {
-		const images = [im(0), im(2)];
+		const images = [im(3), im(2)];
 		applyCaptions(images, [true, false], paras, new Set(), new Set());
 		expect(images[0].caption).toBe(true);
 		expect("caption" in images[1]).toBe(false);
 	});
 	it("из нескольких рисунков с одним at — только последний", () => {
-		const images = [im(0), im(0)];
+		const images = [im(3), im(3)];
 		applyCaptions(images, [true, true], paras, new Set(), new Set());
 		expect("caption" in images[0]).toBe(false);
 		expect(images[1].caption).toBe(true);
 	});
 	it("at за концом текста и заголовки — не подпись", () => {
-		const images = [im(4), im(0)];
-		applyCaptions(images, [true, true], paras, new Set(), new Set([0]));
+		const images = [im(4), im(2)];
+		applyCaptions(images, [true, true], paras, new Set(), new Set([2]));
 		expect("caption" in images[0]).toBe(false);
 		expect("caption" in images[1]).toBe(false);
+	});
+	it("рисунок в начале книги (at 0) подписи не получает", () => {
+		const images = [im(0)];
+		applyCaptions(images, [true], paras, new Set([0]), new Set());
+		expect("caption" in images[0]).toBe(false);
 	});
 	it("размеченный абзац считается подписью", () => {
 		const images = [im(1)];

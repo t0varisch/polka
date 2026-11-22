@@ -371,6 +371,11 @@ describe("EPUB: подписи к рисункам", () => {
 		expect(flags(b)).toEqual([[1, false], [1, true]]);
 	});
 
+	it("рисунок в начале книги (at 0) подписи не получает", async () => {
+		const b = await parse(`<p><img src="a.png"/></p><p>Рис. 1</p><p>Текст.</p>`);
+		expect(flags(b)).toEqual([[0, false]]);
+	});
+
 	it("alt в подпись не идёт и подписью не считается", async () => {
 		const b = await parse(`<p>Текст.</p><p><img src="a.png" alt="Рис. 1"/></p><p>Тут идёт обычное предложение, которое точно не подпись.</p>`);
 		expect(flags(b)).toEqual([[1, false]]);

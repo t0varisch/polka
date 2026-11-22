@@ -51,7 +51,8 @@ export function applyCaptions(images: BookImage[], blocks: boolean[], paragraphs
 	images.forEach((im, i) => {
 		if (!blocks[i] || last.get(im.at) !== i) return;
 		const p = im.at;
-		if (p >= paragraphs.length || skip.has(p)) return;
+		// at 0 — титульная страница или обложка в тексте: абзац 0 (автор, название) не подпись
+		if (p === 0 || p >= paragraphs.length || skip.has(p)) return;
 		if (looksLikeCaption(paragraphs[p], marked.has(p))) im.caption = true;
 	});
 }
