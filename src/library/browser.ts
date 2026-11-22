@@ -4,6 +4,7 @@ import type { BookRecord, OpenedBook, ParsedBook } from "../types";
 import { db, getText, putText } from "./db";
 import { bookId } from "./hash";
 import { newRecord, shouldReplace } from "./record";
+import { staleText } from "./text";
 import type { Library, ParseProgress, ShelfItem } from "./types";
 
 /** Библиотека в браузере: записи и тексты в IndexedDB. Ключ книги — её id. */
@@ -24,7 +25,7 @@ export class BrowserLibrary implements Library {
 		if (!record || !text) throw new Error("Книга не найдена");
 		const opened: BookRecord = { ...record, openedAt: Date.now() };
 		await d.put("books", opened);
-		return { record: opened, paragraphs: text.paragraphs, toc: text.toc, images: [] };
+		return { record: opened, paragraphs: text.paragraphs, toc: text.toc, images: text.images };
 	}
 
 	/** Свежее побеждает: запись старее сохранённой не заменяет её. Чтение и запись — в одной транзакции. */
@@ -43,9 +44,15 @@ export class BrowserLibrary implements Library {
 		const keys: string[] = [];
 		for (const file of files) {
 			const id = await bookId(new Uint8Array(await file.arrayBuffer()));
-			if (!(await (await db()).get("books", id))) {
+			const existing = await (await db()).get("books", id);
+			const cached = existing ? await getText(id) : null;
+			if (!existing) {
 				const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
 				await this.store(id, book);
+			} else if (!cached || staleText(cached, existing.format)) {
+				// книга есть, а текст пропал или разобран до рисунков: обновляем только текст, запись не трогаем
+				const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
+				await putText(id, book.paragraphs, book.toc, book.images ?? []);
 			}
 			keys.push(id);
 		}
@@ -69,7 +76,7 @@ export class BrowserLibrary implements Library {
 	private async store(id: string, book: ParsedBook): Promise<void> {
 		const wordCount = buildWords(book.paragraphs).words.length;
 		if (!wordCount) throw new Error("в файле не нашлось текста");
-		await putText(id, book.paragraphs, book.toc);
+		await putText(id, book.paragraphs, book.toc, book.images ?? []);
 		await this.save(newRecord(id, book, wordCount));
 	}
 }

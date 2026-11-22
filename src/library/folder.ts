@@ -1,8 +1,9 @@
 import { buildWords } from "../core/words";
 import { parseFile, readBytes } from "../parsers";
-import type { BookRecord, OpenedBook, ParsedBook, TocEntry } from "../types";
+import type { BookImage, BookRecord, OpenedBook, ParsedBook, TocEntry } from "../types";
 import { getText, putText } from "./db";
 import { bookId } from "./hash";
+import { type CachedText, TEXT_VERSION, staleText } from "./text";
 import { type ProgressFile, mergeProgress, newRecord, parseProgress, serializeProgress } from "./record";
 import type { Library, ParseProgress, ShelfItem } from "./types";
 
@@ -13,8 +14,8 @@ const MAX_DEPTH = 3;
 
 /** Кэш разобранных текстов; в приложении — IndexedDB, в тестах — память. */
 export interface TextCache {
-	get(id: string): Promise<{ paragraphs: string[]; toc: TocEntry[] } | null>;
-	put(id: string, paragraphs: string[], toc: TocEntry[]): Promise<void>;
+	get(id: string): Promise<CachedText | null>;
+	put(id: string, paragraphs: string[], toc: TocEntry[], images: BookImage[]): Promise<void>;
 }
 
 export const idbTextCache: TextCache = { get: getText, put: putText };
@@ -115,22 +116,35 @@ export class FolderLibrary implements Library {
 		const record = (await this.readProgress()).books[key];
 		if (!record) throw new Error("Книга не найдена");
 		let text = await this.cache.get(key);
-		if (!text) {
-			if (!record.file) throw new Error("Файл книги не найден в папке");
-			let file: File;
+		if (!text || staleText(text, record.format)) {
+			let file: File | null = null;
 			try {
-				file = await this.fileAt(record.file);
+				if (record.file) file = await this.fileAt(record.file);
 			} catch (e) {
-				if (isNotFound(e)) throw new Error("Файл книги не найден в папке — возможно, его переместили или удалили");
-				throw e;
+				if (!isNotFound(e)) throw e;
 			}
-			const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
-			await this.cache.put(key, book.paragraphs, book.toc);
-			text = { paragraphs: book.paragraphs, toc: book.toc };
+			if (file) {
+				const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
+				text = await this.cacheParsed(key, book);
+			} else if (text) {
+				// файла нет, а старый текст есть — открываем его без рисунков
+				text = { ...text, images: [] };
+			} else if (!record.file) {
+				throw new Error("Файл книги не найден в папке");
+			} else {
+				throw new Error("Файл книги не найден в папке — возможно, его переместили или удалили");
+			}
 		}
 		const opened: BookRecord = { ...record, openedAt: now, updatedAt: Math.max(now, record.updatedAt + 1) };
 		await this.save(opened);
-		return { record: opened, paragraphs: text.paragraphs, toc: text.toc, images: [] };
+		return { record: opened, paragraphs: text.paragraphs, toc: text.toc, images: text.images };
+	}
+
+	/** Кладёт свежий разбор в кэш и отдаёт его же как текст книги. */
+	private async cacheParsed(id: string, book: ParsedBook): Promise<CachedText> {
+		const images = book.images ?? [];
+		await this.cache.put(id, book.paragraphs, book.toc, images);
+		return { paragraphs: book.paragraphs, toc: book.toc, images, v: TEXT_VERSION };
 	}
 
 	save(record: BookRecord): Promise<void> {
@@ -216,9 +230,9 @@ export class FolderLibrary implements Library {
 		const where = { file: path, size: file.size, mtime: file.lastModified };
 		let text = await this.cache.get(id);
 		let book: ParsedBook | null = null;
-		if (!existing || !text) {
+		if (!existing || !text || staleText(text, existing.format)) {
 			book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
-			text = { paragraphs: book.paragraphs, toc: book.toc };
+			text = { paragraphs: book.paragraphs, toc: book.toc, images: book.images ?? [], v: TEXT_VERSION };
 		}
 		let record: BookRecord;
 		if (existing) {
@@ -229,9 +243,9 @@ export class FolderLibrary implements Library {
 			if (!wordCount) throw new Error("в файле не нашлось текста");
 			record = { ...newRecord(id, book as ParsedBook, wordCount, now), ...where };
 		}
-		if (book) await this.cache.put(id, text.paragraphs, text.toc);
+		if (book) await this.cache.put(id, text.paragraphs, text.toc, text.images);
 		await this.save(record);
-		return { record, paragraphs: text.paragraphs, toc: text.toc, images: [] };
+		return { record, paragraphs: text.paragraphs, toc: text.toc, images: text.images };
 	}
 
 	/** Кладёт файл в корень папки: имя занято другим содержимым — «Имя (2).ext». Тот же файл повторно не пишется. */

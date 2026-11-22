@@ -1,17 +1,25 @@
 import { describe, expect, it } from "vitest";
+import { fb2WithImages, utf8 } from "../parsers/test-fixtures";
 import { type TextCache, FolderLibrary, PROGRESS_FILE, SERVICE_DIR } from "./folder";
 import { folderStateOf } from "./index";
 import { type MemDirHandle, asDirHandle, createMemFs } from "./memfs";
 import { parseProgress } from "./record";
+import { type CachedText, TEXT_VERSION } from "./text";
 
 const BOOK = (n: number) => `Книга номер ${n}\n\nПервый абзац книги ${n} со словами для счёта.\n\nВторой абзац книги ${n} тоже со словами.`;
 
-function memCache(): TextCache {
-	const m = new Map<string, { paragraphs: string[]; toc: never[] }>();
-	return {
-		get: async (id) => m.get(id) ?? null,
-		put: async (id, paragraphs) => void m.set(id, { paragraphs, toc: [] }),
+/** Кэш в памяти: m — содержимое (можно подложить старую запись), puts — сколько раз в него писали. */
+function memCache(): TextCache & { m: Map<string, CachedText>; puts: number } {
+	const c = {
+		m: new Map<string, CachedText>(),
+		puts: 0,
+		get: async (id: string) => c.m.get(id) ?? null,
+		put: async (id: string, paragraphs: string[], toc: never[], images: CachedText["images"]) => {
+			c.puts++;
+			c.m.set(id, { paragraphs, toc, images, v: TEXT_VERSION });
+		},
 	};
+	return c;
 }
 
 function setup(): { fs: MemDirHandle; lib: FolderLibrary } {
@@ -261,5 +269,80 @@ describe("folderStateOf", () => {
 		expect(await folderStateOf(h("denied"), true)).toBe("needs-permission");
 		const broken = { name: "x", queryPermission: () => Promise.reject(new Error("отказ")) } as unknown as FileSystemDirectoryHandle;
 		expect(await folderStateOf(broken, true)).toBe("needs-permission");
+	});
+});
+
+describe("FolderLibrary: рисунки и устаревший кэш", () => {
+	const fb2 = () => {
+		const fs = createMemFs();
+		fs.put("Рис.fb2", utf8(fb2WithImages()));
+		const cache = memCache();
+		return { fs, cache, lib: new FolderLibrary(asDirHandle(fs), cache) };
+	};
+	/** Подкладывает запись кэша так, будто она сделана до рисунков. */
+	const makeStale = (cache: ReturnType<typeof memCache>, id: string) => {
+		const t = cache.m.get(id) as CachedText;
+		cache.m.set(id, { paragraphs: t.paragraphs, toc: t.toc, images: [], v: 1 });
+	};
+
+	it("свежее открытие FB2: в кэше v2 и рисунки, второе открытие не разбирает заново", async () => {
+		const { cache, lib } = fb2();
+		const first = await lib.open("f:Рис.fb2");
+		expect(first.images.length).toBeGreaterThan(0);
+		const id = first.record.id;
+		expect(cache.m.get(id)?.v).toBe(2);
+		expect(cache.m.get(id)?.images.length).toBe(first.images.length);
+		expect(cache.puts).toBe(1);
+		const second = await lib.open(id);
+		expect(second.images.length).toBe(first.images.length);
+		expect(cache.puts).toBe(1);
+	});
+
+	it("кэш v1 без рисунков: после open рисунки есть, место не тронуто", async () => {
+		const { cache, lib } = fb2();
+		const first = await lib.open("f:Рис.fb2");
+		const id = first.record.id;
+		const position = { ...first.record.position, word: 4, para: 1 };
+		await lib.save({ ...first.record, position, updatedAt: first.record.updatedAt + 10 });
+		makeStale(cache, id);
+		const again = await lib.open(id);
+		expect(again.images.length).toBe(first.images.length);
+		expect(again.record.position.word).toBe(4);
+		expect(again.paragraphs).toEqual(first.paragraphs);
+		expect(cache.m.get(id)?.v).toBe(2);
+		expect((await lib.record(id))?.position.word).toBe(4);
+	});
+
+	it("кэш v1 и файл удалён: open не бросает, абзацы старые, рисунков нет", async () => {
+		const { fs, cache, lib } = fb2();
+		const first = await lib.open("f:Рис.fb2");
+		makeStale(cache, first.record.id);
+		fs.files.delete("Рис.fb2");
+		const again = await lib.open(first.record.id);
+		expect(again.paragraphs).toEqual(first.paragraphs);
+		expect(again.images).toEqual([]);
+	});
+
+	it("TXT с кэшем v1: заново не разбирается", async () => {
+		const cache = memCache();
+		const fs = createMemFs();
+		fs.put("Альфа.txt", BOOK(1));
+		const own = new FolderLibrary(asDirHandle(fs), cache);
+		const first = await own.open("f:Альфа.txt");
+		const t = cache.m.get(first.record.id) as CachedText;
+		cache.m.set(first.record.id, { ...t, v: 1 });
+		const puts = cache.puts;
+		await own.open(first.record.id);
+		await own.open("f:Альфа.txt");
+		expect(cache.puts).toBe(puts);
+	});
+
+	it("открытие по пути f: с устаревшим кэшем: рисунки есть", async () => {
+		const { cache, lib } = fb2();
+		const first = await lib.open("f:Рис.fb2");
+		makeStale(cache, first.record.id);
+		const again = await lib.open("f:Рис.fb2");
+		expect(again.images.length).toBe(first.images.length);
+		expect(again.record.id).toBe(first.record.id);
 	});
 });
