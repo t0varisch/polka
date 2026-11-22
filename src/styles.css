@@ -316,10 +316,9 @@ div.book {
 .ticks .tick {
 	position: absolute;
 	top: 0;
-	width: 1px;
-	height: 8px;
+	width: 2px;
+	height: 7px;
 	background: var(--muted);
-	opacity: 0.6;
 	pointer-events: none;
 }
 .progress-fill {
