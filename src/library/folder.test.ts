@@ -1,10 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as parsers from "../parsers";
 import { fb2WithImages, utf8 } from "../parsers/test-fixtures";
 import { type TextCache, FolderLibrary, PROGRESS_FILE, SERVICE_DIR } from "./folder";
 import { folderStateOf } from "./index";
 import { type MemDirHandle, asDirHandle, createMemFs } from "./memfs";
 import { parseProgress } from "./record";
 import { type CachedText, TEXT_VERSION } from "./text";
+
+// parseFile оборачиваем, чтобы в тестах можно было заставить разбор упасть
+vi.mock("../parsers", async (orig) => {
+	const actual = await orig<typeof import("../parsers")>();
+	return { ...actual, parseFile: vi.fn(actual.parseFile) };
+});
 
 const BOOK = (n: number) => `Книга номер ${n}\n\nПервый абзац книги ${n} со словами для счёта.\n\nВторой абзац книги ${n} тоже со словами.`;
 
@@ -344,5 +351,45 @@ describe("FolderLibrary: рисунки и устаревший кэш", () => {
 		const again = await lib.open("f:Рис.fb2");
 		expect(again.images.length).toBe(first.images.length);
 		expect(again.record.id).toBe(first.record.id);
+	});
+
+	it("кэш v1 и файл не разбирается: открывается старый текст, рисунков нет", async () => {
+		const { cache, lib } = fb2();
+		const first = await lib.open("f:Рис.fb2");
+		const id = first.record.id;
+		makeStale(cache, id);
+		const puts = cache.puts;
+		vi.mocked(parsers.parseFile).mockRejectedValueOnce(new Error("битый файл"));
+		const again = await lib.open(id);
+		expect(again.paragraphs).toEqual(first.paragraphs);
+		expect(again.images).toEqual([]);
+		expect(cache.puts).toBe(puts);
+		// то же по пути f:
+		vi.mocked(parsers.parseFile).mockRejectedValueOnce(new Error("битый файл"));
+		const byPath = await lib.open("f:Рис.fb2");
+		expect(byPath.paragraphs).toEqual(first.paragraphs);
+		expect(byPath.images).toEqual([]);
+	});
+
+	it("кэша нет и файл не разбирается: ошибка как раньше", async () => {
+		const { cache, lib } = fb2();
+		const first = await lib.open("f:Рис.fb2");
+		cache.m.clear();
+		vi.mocked(parsers.parseFile).mockRejectedValueOnce(new Error("битый файл"));
+		await expect(lib.open(first.record.id)).rejects.toThrow();
+	});
+
+	it("кэш v1 и по пути лежит другой файл: открывается старый текст, кэш не перезаписан", async () => {
+		const { fs, cache, lib } = fb2();
+		const first = await lib.open("f:Рис.fb2");
+		const id = first.record.id;
+		makeStale(cache, id);
+		const puts = cache.puts;
+		fs.put("Рис.fb2", utf8(fb2WithImages().replace("Первый абзац.", "Совсем другой абзац.")));
+		const again = await lib.open(id);
+		expect(again.paragraphs).toEqual(first.paragraphs);
+		expect(again.images).toEqual([]);
+		expect(cache.puts).toBe(puts);
+		expect(cache.m.get(id)?.v).toBe(1);
 	});
 });

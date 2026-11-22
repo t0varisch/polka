@@ -51,8 +51,13 @@ export class BrowserLibrary implements Library {
 				await this.store(id, book);
 			} else if (!cached || staleText(cached, existing.format)) {
 				// книга есть, а текст пропал или разобран до рисунков: обновляем только текст, запись не трогаем
-				const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
-				await putText(id, book.paragraphs, book.toc, book.images ?? []);
+				try {
+					const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
+					await putText(id, book.paragraphs, book.toc, book.images ?? []);
+				} catch {
+					// обновить не вышло — книга остаётся как была
+					if (!cached) throw new Error("не удалось разобрать файл");
+				}
 			}
 			keys.push(id);
 		}

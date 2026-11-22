@@ -123,7 +123,19 @@ export class FolderLibrary implements Library {
 			} catch (e) {
 				if (!isNotFound(e)) throw e;
 			}
-			if (file) {
+			if (file && text) {
+				// кэш устарел: перечитываем, только если по пути лежит та же книга и файл разбирается
+				try {
+					if ((await bookId(await readBytes(file))) === key) {
+						const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
+						text = await this.cacheParsed(key, book);
+					} else {
+						text = { ...text, images: [] };
+					}
+				} catch {
+					text = { ...text, images: [] };
+				}
+			} else if (file) {
 				const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
 				text = await this.cacheParsed(key, book);
 			} else if (text) {
@@ -231,8 +243,15 @@ export class FolderLibrary implements Library {
 		let text = await this.cache.get(id);
 		let book: ParsedBook | null = null;
 		if (!existing || !text || staleText(text, existing.format)) {
-			book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
-			text = { paragraphs: book.paragraphs, toc: book.toc, images: book.images ?? [], v: TEXT_VERSION };
+			try {
+				book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
+				text = { paragraphs: book.paragraphs, toc: book.toc, images: book.images ?? [], v: TEXT_VERSION };
+			} catch (e) {
+				// сбой повторного разбора не мешает открыть книгу по старому тексту
+				if (!existing || !text) throw e;
+				book = null;
+				text = { ...text, images: [] };
+			}
 		}
 		let record: BookRecord;
 		if (existing) {
