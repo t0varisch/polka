@@ -21,6 +21,16 @@ describe("looksLikeCaption", () => {
 		}
 		expect(looksLikeCaption("Рис. 3. " + "а".repeat(300), false)).toBe(false);
 	});
+	it("подпись с номером длиннее 120 знаков без разметки — подпись, без номера — нет", () => {
+		const body = "а".repeat(200);
+		for (const t of ["Рис. 3. " + body, "Таблица 2 " + body, "Fig. 4 " + body]) {
+			expect(t.length).toBeGreaterThan(120);
+			expect(looksLikeCaption(t, false), t.slice(0, 12)).toBe(true);
+		}
+		const no = "Карта показывает, что " + body;
+		expect(no.length).toBeGreaterThan(120);
+		expect(looksLikeCaption(no, false)).toBe(false);
+	});
 	it("слово подписи в строке до 120 знаков — подпись и без номера", () => {
 		expect(looksLikeCaption("Карта " + "а".repeat(100), false)).toBe(true);
 		expect(looksLikeCaption("Карта " + "а".repeat(150), false)).toBe(false);
