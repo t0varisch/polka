@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseEpub } from "./epub";
 import { parseFile } from "./index";
-import { encodeSingleByte, fileFrom, makeZip } from "./test-fixtures";
+import { decodeBase64 } from "./images";
+import { PNG_1X1_BASE64, encodeSingleByte, fileFrom, makeZip } from "./test-fixtures";
 
 const CONTAINER = `<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -196,5 +197,100 @@ describe("EPUB", () => {
 		const bytes = await makeZip(epub3Files(), true);
 		expect((await parseFile(fileFrom(bytes, "Книга.fb2.epub"))).format).toBe("epub");
 		expect((await parseFile(fileFrom(bytes, "Книга.zip"))).format).toBe("epub");
+	});
+});
+
+// ---------- рисунки ----------
+
+function epubWithImagesFiles(cover: "property" | "meta" | "none" = "property"): Record<string, string | Uint8Array> {
+	const png = decodeBase64(PNG_1X1_BASE64)!;
+	const coverItem =
+		cover === "property"
+			? `<item id="cov" href="images/cover.png" media-type="image/png" properties="cover-image"/>`
+			: `<item id="cov" href="images/cover.png" media-type="image/png"/>`;
+	return {
+		mimetype: "application/epub+zip",
+		"META-INF/container.xml": CONTAINER,
+		"OEBPS/content.opf": `<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:2</dc:identifier><dc:title>С рисунками</dc:title>
+${cover === "meta" ? `<meta name="cover" content="cov"/>` : ""}</metadata>
+<manifest>
+<item id="ch1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+${cover === "none" ? "" : coverItem}
+<item id="a" href="images/a.png" media-type="image/png"/>
+<item id="b" href="images/b.bin" media-type="image/jpeg"/>
+</manifest>
+<spine><itemref idref="ch1"/></spine>
+</package>`,
+		"OEBPS/text/ch1.xhtml": `${XHTML_HEAD}<head><title>x</title></head><body>
+<h1>Глава 1</h1>
+<p>Первый абзац.</p>
+<img src="../images/a.png" alt=""/>
+<p>Второй <img src="../images/b.bin"/> абзац.</p>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="../images/c.png"/></svg>
+<p>Третий.</p>
+<img src="../images/missing.png"/>
+<picture><source srcset="x.webp"/><img src="../images/d%2Epng"/></picture>
+</body></html>`,
+		"OEBPS/images/cover.png": png,
+		"OEBPS/images/a.png": png,
+		"OEBPS/images/b.bin": new Uint8Array([1, 2, 3, 4, 5]),
+		"OEBPS/images/c.png": png,
+		"OEBPS/images/d.png": png,
+	};
+}
+
+const IMG_EPUB_TEXT = ["Глава 1", "Первый абзац.", "Второй абзац.", "Третий."];
+
+
+describe("EPUB: рисунки", () => {
+	it("img, svg > image, img в picture, путь «../» из подпапки; отсутствующий файл пропущен", async () => {
+		const book = await parseEpub(await makeZip(epubWithImagesFiles(), true), "i.epub");
+		expect(book.paragraphs).toEqual(IMG_EPUB_TEXT);
+		const imgs = book.images!;
+		// обложка не из текста — первая; потом a (между абзацами), b (внутри абзаца — после него), c (svg), d (picture, в конце)
+		expect(imgs.map((i) => i.at)).toEqual([0, 2, 3, 3, 4]);
+		expect(imgs.map((i) => i.mime)).toEqual(["image/png", "image/png", "image/jpeg", "image/png", "image/png"]);
+		expect(imgs.map((i) => [i.w, i.h])).toEqual([[1, 1], [1, 1], [0, 0], [1, 1], [1, 1]]);
+	});
+
+	it("обложка через meta name=cover", async () => {
+		const book = await parseEpub(await makeZip(epubWithImagesFiles("meta"), true), "i.epub");
+		expect(book.images!.map((i) => i.at)).toEqual([0, 2, 3, 3, 4]);
+	});
+
+	it("без обложки в манифесте — только рисунки текста", async () => {
+		const book = await parseEpub(await makeZip(epubWithImagesFiles("none"), true), "i.epub");
+		expect(book.images!.map((i) => i.at)).toEqual([2, 3, 3, 4]);
+	});
+
+	it("обложка, которая есть и в тексте, не дублируется и не уходит в начало", async () => {
+		const files = epubWithImagesFiles();
+		files["OEBPS/text/ch1.xhtml"] = (files["OEBPS/text/ch1.xhtml"] as string).replace(`../images/a.png`, `../images/cover.png`);
+		const book = await parseEpub(await makeZip(files, true), "i.epub");
+		expect(book.images!.map((i) => i.at)).toEqual([2, 3, 3, 4]);
+	});
+
+	it("paragraphs и toc не зависят от рисунков", async () => {
+		const withPics = await parseEpub(await makeZip(epubWithImagesFiles(), true), "i.epub");
+		const files = epubWithImagesFiles();
+		for (const k of Object.keys(files)) if (k.startsWith("OEBPS/images/")) delete files[k];
+		const noPics = await parseEpub(await makeZip(files, true), "i.epub");
+		expect(noPics.images).toBeUndefined();
+		expect(withPics.paragraphs).toEqual(noPics.paragraphs);
+		expect(withPics.toc).toEqual(noPics.toc);
+	});
+
+	it("рисунок в файле сносок, оставшемся с одним заголовком, не выходит за конец текста", async () => {
+		const files = epubWithImagesFiles();
+		files["OEBPS/content.opf"] = (files["OEBPS/content.opf"] as string)
+			.replace(`<item id="a"`, `<item id="notes" href="text/notes.xhtml" media-type="application/xhtml+xml"/><item id="a"`)
+			.replace(`<itemref idref="ch1"/>`, `<itemref idref="ch1"/><itemref idref="notes"/>`);
+		files["OEBPS/text/notes.xhtml"] = `${XHTML_HEAD}<head><title>n</title></head><body><h2>Примечания</h2><img src="../images/a.png"/></body></html>`;
+		const book = await parseEpub(await makeZip(files, true), "i.epub");
+		expect(book.paragraphs).toEqual(IMG_EPUB_TEXT);
+		for (const i of book.images!) expect(i.at).toBeLessThanOrEqual(book.paragraphs.length);
+		expect(book.images!.map((i) => i.at)).toEqual([0, 2, 3, 3, 4, 4]);
 	});
 });

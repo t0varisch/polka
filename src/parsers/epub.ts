@@ -1,9 +1,10 @@
 // Частично основано на Speeedy (MIT, © 2026 Speeedy, github.com/sami-29/speeedy)
 // EPUB 2/3: текст по порядку spine, оглавление из nav или NCX, без сносок и служебных страниц.
 import JSZip from "jszip";
-import type { ParsedBook, TocEntry } from "../types";
+import type { BookImage, ParsedBook, TocEntry } from "../types";
 import { decodeMarkup } from "./decode";
 import { attrLocal, childByLocal, childrenByLocal, elementsByLocal, localOf, parseMarkup, parseXmlLoose } from "./dom";
+import { makeImage } from "./images";
 import { BookParseError, ERR_DRM, ERR_EMPTY, GAP, cleanParagraph, isNoteMarker, titleFromFileName } from "./util";
 
 const OPS_NS = "http://www.idpf.org/2007/ops";
@@ -143,16 +144,27 @@ interface Heading {
 	title: string;
 }
 
+const HAS_TEXT_RE = /[\p{L}\p{N}]/u;
+
+/** Рисунок из текста: перед абзацем at, файл — ключ внутри архива. */
+interface ImageRef {
+	at: number;
+	path: string;
+}
+
 class Walker {
 	paragraphs: string[] = [];
 	anchors = new Map<string, number>();
 	fileStart = new Map<string, number>();
 	headings: Heading[] = [];
+	images: ImageRef[] = [];
 	/** Ключ текущего файла */
 	path = "";
 	private buf = "";
 	private lastBr = false;
 	private discard = false;
+	/** Рисунки внутри абзаца: место — после него, назначается при выпуске абзаца */
+	private pending: string[] = [];
 
 	constructor(private noteTargets: Set<string>) {}
 
@@ -161,6 +173,8 @@ class Walker {
 			const p = cleanParagraph(this.buf);
 			if (p) this.paragraphs.push(p);
 		}
+		for (const path of this.pending) this.images.push({ at: this.paragraphs.length, path });
+		this.pending = [];
 		this.buf = "";
 		this.discard = false;
 		this.lastBr = false;
@@ -170,14 +184,37 @@ class Walker {
 		this.path = path;
 		const start = this.paragraphs.length;
 		this.fileStart.set(path, start);
+		const imagesStart = this.images.length;
 		this.walk(body);
 		this.flush();
 		// от файла сносок остался один заголовок «Примечания» — убрать и его
 		if (this.paragraphs.length === start + 1 && NOTES_TITLE_RE.test(this.paragraphs[start])) {
 			this.paragraphs.pop();
+			// рисунки этого файла не должны стоять за концом текста
+			for (let i = imagesStart; i < this.images.length; i++) this.images[i].at = Math.min(this.images[i].at, this.paragraphs.length);
 			this.headings = this.headings.filter((h) => h.paragraph < start);
 			this.fileStart.delete(path);
 			for (const k of [...this.anchors.keys()]) if (k.startsWith(path + "#")) this.anchors.delete(k);
+		}
+	}
+
+	/** Запоминает рисунки элемента: img, image внутри svg, img внутри picture. Файлы читаются позже. */
+	private takeImages(el: Element, n: string): void {
+		if (this.discard) return;
+		const srcs: (string | null)[] = [];
+		if (n === "img") srcs.push(el.getAttribute("src"));
+		else if (n === "image") srcs.push(attrLocal(el, "href"));
+		else if (n === "svg") for (const im of elementsByLocal(el, "image")) srcs.push(attrLocal(im, "href"));
+		else if (n === "picture") for (const im of elementsByLocal(el, "img")) srcs.push(im.getAttribute("src"));
+		for (const src of srcs) {
+			// внешние адреса и data: не берём — без сети
+			if (!src || /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//")) continue;
+			const rel = src.split("#")[0].split("?")[0];
+			if (!rel) continue;
+			const path = key(resolvePath(this.path, rel));
+			// в буфере ещё нет текста — рисунок перед следующим абзацем, иначе после текущего
+			if (!this.pending.length && !HAS_TEXT_RE.test(this.buf)) this.images.push({ at: this.paragraphs.length, path });
+			else this.pending.push(path);
 		}
 	}
 
@@ -198,6 +235,7 @@ class Walker {
 		const n = localOf(el);
 		if (SKIP.has(n) || el.hasAttribute("hidden")) {
 			if (n === "img" || n === "svg" || n === "math") this.buf += GAP;
+			if (!el.hasAttribute("hidden")) this.takeImages(el, n);
 			return;
 		}
 		const sem = semantic(el);
@@ -533,12 +571,39 @@ export async function parseEpubZip(zip: JSZip, fileName = "", onProgress?: (f: n
 		toc = normalizeToc(w.headings.map((h) => ({ title: h.title.slice(0, 150), level: h.level - 1, paragraph: h.paragraph })));
 	}
 
+	// обложка из описания: если её нет среди рисунков текста — первой, с at 0
+	const refs = [...w.images];
+	const coverItem =
+		items.find((it) => /(^|\s)cover-image(\s|$)/.test(it.properties)) ??
+		manifest.get(elementsByLocal(metadata, "meta").find((m) => m.getAttribute("name") === "cover")?.getAttribute("content") ?? "");
+	if (coverItem && !refs.some((r) => r.path === coverItem.path)) refs.unshift({ at: 0, path: coverItem.path });
+
+	// файлы читаем после обхода: обход синхронный, чтение из архива — нет
+	const mediaTypes = new Map(items.map((it) => [it.path, it.mediaType]));
+	const loaded = new Map<string, Uint8Array | null>();
+	const images: BookImage[] = [];
+	for (const r of refs) {
+		if (!loaded.has(r.path)) {
+			let data: Uint8Array | null = null;
+			try {
+				const entry = idx.get(r.path);
+				if (entry) data = await entry.async("uint8array");
+			} catch {
+				data = null;
+			}
+			loaded.set(r.path, data);
+		}
+		const im = makeImage(r.at, loaded.get(r.path) ?? null, mediaTypes.get(r.path) ?? "");
+		if (im) images.push(im);
+	}
+
 	return {
 		title: title || titleFromFileName(fileName),
 		author: authors.join(", "),
 		format: "epub",
 		paragraphs: w.paragraphs,
 		toc,
+		...(images.length ? { images } : {}),
 	};
 }
 

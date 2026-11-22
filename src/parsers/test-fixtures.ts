@@ -131,3 +131,34 @@ export function buildPdf(spec: PdfSpec): Uint8Array {
 	out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R /Info ${infoId} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
 	return new TextEncoder().encode(out);
 }
+
+// ---------- FB2 с рисунками ----------
+
+/** Настоящая PNG 1×1 в base64. */
+export const PNG_1X1_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/**
+ * FB2 с обложкой в coverpage, рисунком между абзацами, рисунком внутри абзаца,
+ * ссылкой на несуществующий binary и binary с мусором вместо base64.
+ * Абзацы: «Глава 1», «Первый абзац.», «Второй абзац с рисунком внутри.», «Третий абзац.», «Четвёртый абзац.».
+ */
+export function fb2WithImages(): string {
+	return `<?xml version="1.0" encoding="utf-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+<description><title-info><author><last-name>Рисовальщик</last-name></author><book-title>Книга с рисунками</book-title>
+<coverpage><image l:href="#cover.png"/></coverpage></title-info></description>
+<body><section><title><p>Глава 1</p></title>
+<p>Первый абзац.</p>
+<image l:href="#pic.png"/>
+<p>Второй абзац <image l:href="#inline.png"/> с рисунком внутри.</p>
+<image l:href="#missing.png"/>
+<p>Третий абзац.</p>
+<image l:href="#broken.png"/>
+<p>Четвёртый абзац.</p>
+</section></body>
+<binary id="cover.png" content-type="image/png">${PNG_1X1_BASE64}</binary>
+<binary id="pic.png" content-type="image/png">${PNG_1X1_BASE64}</binary>
+<binary id="inline.png" content-type="image/png">${PNG_1X1_BASE64}</binary>
+<binary id="broken.png" content-type="image/png">это не base64 !!!</binary>
+</FictionBook>`;
+}

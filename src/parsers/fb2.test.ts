@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseFb2, parseFb2String } from "./fb2";
 import { parseFile } from "./index";
-import { encodeSingleByte, fileFrom, makeZip, utf8 } from "./test-fixtures";
+import { PNG_1X1_BASE64, encodeSingleByte, fb2WithImages, fileFrom, makeZip, utf8 } from "./test-fixtures";
 
 const BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".repeat(40);
 
@@ -166,5 +166,82 @@ describe("FB2", () => {
 	it("FB2 в UTF-8 без объявления кодировки", () => {
 		const xml = fb2Xml().replace(` encoding="windows-1251"`, "");
 		expect(parseFb2(utf8(xml)).paragraphs).toEqual(EXPECTED);
+	});
+});
+
+const IMG_PARAGRAPHS = ["Глава 1", "Первый абзац.", "Второй абзац с рисунком внутри.", "Третий абзац.", "Четвёртый абзац."];
+
+/** Тот же текст без рисунков и без binary. */
+function withoutImages(xml: string): string {
+	return xml.replace(/<image[^>]*>/g, "").replace(/<binary[\s\S]*?<\/binary>/g, "");
+}
+
+describe("FB2: рисунки", () => {
+	it("обложка первой с at 0, блочный рисунок перед следующим абзацем, inline — после своего; битые пропущены", () => {
+		const book = parseFb2String(fb2WithImages());
+		expect(book.paragraphs).toEqual(IMG_PARAGRAPHS);
+		expect(book.images!.map((i) => i.at)).toEqual([0, 2, 3]);
+		for (const img of book.images!) {
+			expect(img.mime).toBe("image/png");
+			expect([img.w, img.h]).toEqual([1, 1]);
+			expect(img.data.length).toBeGreaterThan(20);
+		}
+		expect(Array.from(book.images![0].data.subarray(1, 4))).toEqual([0x50, 0x4e, 0x47]);
+	});
+
+	it("paragraphs и toc те же, что у разбора без тегов image и binary (блочные рисунки)", () => {
+		const blockOnly = fb2WithImages().replace(`<image l:href="#inline.png"/>`, "");
+		const a = parseFb2String(blockOnly);
+		const b = parseFb2String(withoutImages(blockOnly));
+		expect(a.images!.length).toBe(2);
+		expect(b.images).toBeUndefined();
+		expect(a.paragraphs).toEqual(b.paragraphs);
+		expect(a.toc).toEqual(b.toc);
+		expect(a.toc).toEqual([{ title: "Глава 1", level: 0, paragraph: 0 }]);
+	});
+
+	it("обложка, на которую есть ссылка и в тексте, не дублируется", () => {
+		const xml = fb2WithImages().replace(`<p>Первый абзац.</p>`, `<p>Первый абзац.</p><image l:href="#cover.png"/>`);
+		const images = parseFb2String(xml).images!;
+		expect(images.map((i) => i.at)).toEqual([2, 2, 3]);
+		expect(images.length).toBe(3);
+	});
+
+	it("рисунок после последнего абзаца: at равен числу абзацев", () => {
+		const xml = fb2WithImages().replace(`<p>Четвёртый абзац.</p>`, `<p>Четвёртый абзац.</p><image l:href="#pic.png"/>`);
+		const book = parseFb2String(xml);
+		expect(book.images!.at(-1)!.at).toBe(book.paragraphs.length);
+	});
+
+	it("binary с атрибутами в любом порядке и любыми кавычками", () => {
+		const xml = `<FictionBook xmlns:xlink="http://www.w3.org/1999/xlink"><body><section><p>Текст.</p><image xlink:href="#a"/><image xlink:href="#b"/></section></body>
+<binary content-type='image/png' id='a'>${PNG_1X1_BASE64}</binary>
+<fb:binary xmlns:fb="x" content-type="image/png" id="b">${PNG_1X1_BASE64}</fb:binary></FictionBook>`;
+		const book = parseFb2String(xml);
+		expect(book.images!.map((i) => i.at)).toEqual([1, 1]);
+	});
+
+	it("битый FB2 (запасной HTML-разбор) тоже отдаёт рисунки", () => {
+		const xml = `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+<description><title-info><book-title>Битая</book-title><coverpage><image l:href="#x"/></coverpage></title-info></description>
+<body><section><title><p>Глава 1</p></title><p>Раз <emphasis>курсив</p><image l:href="#x"/><p>Два</p></section></body>
+<binary id="x" content-type="image/png">${PNG_1X1_BASE64}</binary></FictionBook>`;
+		const book = parseFb2String(xml);
+		expect(book.paragraphs).toEqual(["Глава 1", "Раз курсив", "Два"]);
+		expect(book.images!.map((i) => i.at)).toEqual([2]);
+		expect(book.images![0].mime).toBe("image/png");
+	});
+
+	it(".fb2.zip через parseFile — рисунки на месте", async () => {
+		const bytes = utf8(fb2WithImages());
+		const plain = await parseFile(fileFrom(bytes, "Книга.fb2"));
+		const zipped = await parseFile(fileFrom(await makeZip({ "Книга.fb2": bytes }), "Книга.fb2.zip"));
+		expect(plain.images!.map((i) => i.at)).toEqual([0, 2, 3]);
+		expect(zipped.images).toEqual(plain.images);
+		expect(zipped.paragraphs).toEqual(IMG_PARAGRAPHS);
+	});
+
+	it("книга без рисунков не получает images", () => {
+		expect(parseFb2String(withoutImages(fb2WithImages())).images).toBeUndefined();
 	});
 });

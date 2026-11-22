@@ -130,7 +130,7 @@ export class FolderLibrary implements Library {
 		}
 		const opened: BookRecord = { ...record, openedAt: now, updatedAt: Math.max(now, record.updatedAt + 1) };
 		await this.save(opened);
-		return { record: opened, paragraphs: text.paragraphs, toc: text.toc };
+		return { record: opened, paragraphs: text.paragraphs, toc: text.toc, images: [] };
 	}
 
 	save(record: BookRecord): Promise<void> {
@@ -231,7 +231,7 @@ export class FolderLibrary implements Library {
 		}
 		if (book) await this.cache.put(id, text.paragraphs, text.toc);
 		await this.save(record);
-		return { record, paragraphs: text.paragraphs, toc: text.toc };
+		return { record, paragraphs: text.paragraphs, toc: text.toc, images: [] };
 	}
 
 	/** Кладёт файл в корень папки: имя занято другим содержимым — «Имя (2).ext». Тот же файл повторно не пишется. */

@@ -73,5 +73,11 @@ export function dropPrintedToc(book: ParsedBook): ParsedBook {
 		if (drop.has(e.paragraph)) continue;
 		newToc.push({ ...e, paragraph: e.paragraph - shift[e.paragraph] });
 	}
-	return { ...book, paragraphs: paragraphs.filter((_, i) => !drop.has(i)), toc: newToc };
+	const out: ParsedBook = { ...book, paragraphs: paragraphs.filter((_, i) => !drop.has(i)), toc: newToc };
+	// рисунок стоит перед абзацем at: уходит на число выброшенных абзацев левее него
+	if (book.images) {
+		const left = (at: number) => (at >= paragraphs.length ? removed : shift[at]);
+		out.images = book.images.map((im) => ({ ...im, at: im.at - left(im.at) }));
+	}
+	return out;
 }

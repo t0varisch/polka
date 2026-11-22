@@ -24,7 +24,7 @@ export class BrowserLibrary implements Library {
 		if (!record || !text) throw new Error("Книга не найдена");
 		const opened: BookRecord = { ...record, openedAt: Date.now() };
 		await d.put("books", opened);
-		return { record: opened, paragraphs: text.paragraphs, toc: text.toc };
+		return { record: opened, paragraphs: text.paragraphs, toc: text.toc, images: [] };
 	}
 
 	/** Свежее побеждает: запись старее сохранённой не заменяет её. Чтение и запись — в одной транзакции. */

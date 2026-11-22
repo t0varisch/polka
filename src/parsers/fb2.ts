@@ -1,11 +1,18 @@
-// FictionBook 2: только текст книги — без описания, картинок (base64), стилей и сносок.
-import type { ParsedBook, TocEntry } from "../types";
+// FictionBook 2: текст книги — без описания, base64-картинок, стилей и сносок; рисунки отдельным списком.
+import type { BookImage, ParsedBook, TocEntry } from "../types";
 import { decodeMarkup } from "./decode";
 import { attrLocal, localOf, repairXml, tryParseXml } from "./dom";
 import { joinTitleLines } from "./headings";
+import { decodeBase64, makeImage } from "./images";
 import { BookParseError, ERR_EMPTY, GAP, cleanParagraph, isNoteMarker, titleFromFileName } from "./util";
 
 type Ln = (el: Element) => string;
+
+/** Ссылка на рисунок: id из <binary> и место в книге. */
+interface ImageRef {
+	id: string;
+	at: number;
+}
 
 interface Ctx {
 	ln: Ln;
@@ -13,6 +20,10 @@ interface Ctx {
 	toc: TocEntry[];
 	/** id секций, на которые ведут ссылки-сноски type="note" */
 	noteIds: Set<string>;
+	/** Рисунки, уже получившие место */
+	refs: ImageRef[];
+	/** Рисунки внутри абзаца: место — после него, назначается при выпуске абзаца */
+	pending: string[];
 }
 
 // Строчные элементы: текст идёт в текущий абзац
@@ -24,6 +35,28 @@ const TEXT_BLOCKS = new Set(["p", "v", "subtitle", "text-author", "date", "td", 
 
 const XML_DECL_RE = /^\uFEFF?\s*<\?xml[^>]*\?>/;
 const BINARY_RE = /<(?:[\w.-]+:)?binary\b[^>]*>[\s\S]*?<\/(?:[\w.-]+:)?binary\s*>/g;
+
+const BINARY_GROUPS_RE = /<(?:[\w.-]+:)?binary\b([^>]*)>([\s\S]*?)<\/(?:[\w.-]+:)?binary\s*>/g;
+const ATTR_ID_RE = /(?:^|\s)id\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+const ATTR_TYPE_RE = /(?:^|\s)content-type\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+
+interface RawBinary {
+	type: string;
+	/** base64 как в файле; декодируем только нужные */
+	base64: string;
+}
+
+/** <binary id content-type> из исходной строки — до того, как prepare() их вырежет. */
+function collectBinaries(xml: string): Map<string, RawBinary> {
+	const out = new Map<string, RawBinary>();
+	for (const m of xml.matchAll(BINARY_GROUPS_RE)) {
+		const id = ATTR_ID_RE.exec(m[1]);
+		const type = ATTR_TYPE_RE.exec(m[1]);
+		const key = id?.[1] ?? id?.[2];
+		if (key && !out.has(key)) out.set(key, { type: type?.[1] ?? type?.[2] ?? "", base64: m[2] });
+	}
+	return out;
+}
 
 /** Убирает до разбора то, что не нужно и мешает: объявление XML и base64-картинки. */
 function prepare(xml: string): string {
@@ -109,6 +142,7 @@ function inlineText(el: Element, ctx: Ctx): string {
 		const n = ctx.ln(c);
 		if (SKIP.has(n) || (n === "a" && isNoteLink(c))) {
 			if (n === "a" || n === "image") s += GAP;
+			if (n === "image") holdImage(c, ctx);
 			continue;
 		}
 		s += INLINE.has(n) ? inlineText(c, ctx) : " " + inlineText(c, ctx) + " ";
@@ -116,9 +150,27 @@ function inlineText(el: Element, ctx: Ctx): string {
 	return s;
 }
 
+const HAS_TEXT_RE = /[\p{L}\p{N}]/u;
+
+/** Рисунок внутри абзаца: встанет после него, когда абзац выйдет (или не выйдет — пустой). */
+function holdImage(img: Element, ctx: Ctx): void {
+	const id = hrefTarget(img);
+	if (id) ctx.pending.push(id);
+}
+
+/** Рисунок среди блоков: если в буфере ещё нет текста — перед следующим абзацем, иначе после текущего. */
+function placeImage(img: Element, ctx: Ctx, buf: string): void {
+	const id = hrefTarget(img);
+	if (!id) return;
+	if (!ctx.pending.length && !HAS_TEXT_RE.test(buf)) ctx.refs.push({ id, at: ctx.paragraphs.length });
+	else ctx.pending.push(id);
+}
+
 function emit(ctx: Ctx, text: string): void {
 	const p = cleanParagraph(text);
 	if (p) ctx.paragraphs.push(p);
+	for (const id of ctx.pending) ctx.refs.push({ id, at: ctx.paragraphs.length });
+	ctx.pending = [];
 }
 
 /** Секция — сноска (цель ссылки type="note") или обёртка из одних сносок. */
@@ -160,7 +212,10 @@ function walkMixed(el: Element, ctx: Ctx, depth: number, skip: Element | null): 
 		const c = node as Element;
 		const n = ctx.ln(c);
 		if (SKIP.has(n)) {
-			if (n === "image") buf += GAP;
+			if (n === "image") {
+				buf += GAP;
+				placeImage(c, ctx, buf);
+			}
 			continue;
 		}
 		if (INLINE.has(n)) {
@@ -196,6 +251,7 @@ function looksLikeNotesBody(body: Element, targets: Set<string>, ln: Ln): boolea
 /** Разбор FB2 из строки (кодировка уже снята). */
 export function parseFb2String(xml: string, fileName = ""): ParsedBook {
 	const { ln, root } = parseDom(xml);
+	const binaries = collectBinaries(xml);
 
 	const desc = child(root, "description", ln) ?? firstDesc(root, "description", ln);
 	const info = child(desc, "title-info", ln) ?? firstDesc(desc, "title-info", ln);
@@ -221,9 +277,25 @@ export function parseFb2String(xml: string, fileName = ""): ParsedBook {
 	});
 	if (!main.length && bodies.length) main.push(bodies[0]);
 
-	const ctx: Ctx = { ln, paragraphs: [], toc: [], noteIds };
+	const ctx: Ctx = { ln, paragraphs: [], toc: [], noteIds, refs: [], pending: [] };
 	for (const body of main) walkMixed(body, ctx, 0, null);
 	if (!ctx.paragraphs.length) throw new BookParseError(ERR_EMPTY);
+
+	// обложка — первый image в coverpage; если этот же рисунок есть в тексте, отдельно не нужна
+	const coverImg = firstDesc(firstDesc(info, "coverpage", ln), "image", ln);
+	const coverId = coverImg ? hrefTarget(coverImg) : null;
+	if (coverId && !ctx.refs.some((r) => r.id === coverId)) ctx.refs.unshift({ id: coverId, at: 0 });
+
+	const images: BookImage[] = [];
+	const decoded = new Map<string, Uint8Array | null>();
+	for (const r of ctx.refs) {
+		const bin = binaries.get(r.id);
+		if (!bin) continue;
+		// base64 декодируем только для рисунков, на которые есть ссылки
+		if (!decoded.has(r.id)) decoded.set(r.id, decodeBase64(bin.base64));
+		const im = makeImage(r.at, decoded.get(r.id) ?? null, bin.type);
+		if (im) images.push(im);
+	}
 
 	return {
 		title: title || titleFromFileName(fileName),
@@ -231,6 +303,7 @@ export function parseFb2String(xml: string, fileName = ""): ParsedBook {
 		format: "fb2",
 		paragraphs: ctx.paragraphs,
 		toc: ctx.toc,
+		...(images.length ? { images } : {}),
 	};
 }
 

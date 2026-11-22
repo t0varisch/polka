@@ -8,6 +8,17 @@ export interface TocEntry {
 
 export type BookFormat = "fb2" | "epub" | "txt" | "pdf" | "text";
 
+/** Рисунок из книги. Стоит перед абзацем at; at === paragraphs.length — после последнего абзаца. */
+export interface BookImage {
+	at: number;
+	/** image/jpeg | image/png | image/gif | image/webp | image/bmp | image/svg+xml */
+	mime: string;
+	data: Uint8Array;
+	/** Размер в пикселях из заголовка файла; 0 и 0 — не узнали. */
+	w: number;
+	h: number;
+}
+
 /** Результат разбора файла: только читаемый текст, без служебного. */
 export interface ParsedBook {
 	title: string;
@@ -17,6 +28,8 @@ export interface ParsedBook {
 	/** Абзацы чистого текста. Пробелы схлопнуты, пустых абзацев нет. Заголовки глав — тоже абзацы. */
 	paragraphs: string[];
 	toc: TocEntry[];
+	/** Рисунки книги по возрастанию at, при равном at — в порядке документа. Нет поля — рисунков нет. */
+	images?: BookImage[];
 }
 
 /** Режим чтения одной книги. */
@@ -63,9 +76,11 @@ export interface BookRecord {
 	updatedAt: number;
 }
 
-/** Открытая книга: запись, текст и оглавление. */
+/** Открытая книга: запись, текст, оглавление и рисунки. */
 export interface OpenedBook {
 	record: BookRecord;
 	paragraphs: string[];
 	toc: TocEntry[];
+	/** Всегда массив; рисунков нет — пустой. */
+	images: BookImage[];
 }
