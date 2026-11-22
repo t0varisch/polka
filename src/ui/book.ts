@@ -13,6 +13,7 @@ import { typingMode } from "./modes/typing";
 import { wordsMode } from "./modes/words";
 import { withProgress } from "./progress";
 import { resumeAt, stampUpdated, syncDecision } from "./resume";
+import { newSearchMemo, openSearch, type SearchSheet } from "./search";
 import { openSettings } from "./settings-sheet";
 
 export interface BookCtx {
@@ -122,6 +123,8 @@ function mountBook(
 	let pendingMode: Mode | null = null;
 	let flashTimer: ReturnType<typeof setTimeout> | undefined;
 	const sheetClosers: (() => void)[] = [];
+	const searchMemo = newSearchMemo();
+	let search: SearchSheet | null = null;
 
 	// ---- сохранение: только изменения, не чаще раза в SAVE_EVERY_MS
 	// число слов в книге изменилось: возвращаемся по обрывку текста и сразу записываем найденное место
@@ -199,6 +202,7 @@ function mountBook(
 			iconButton("back", "К библиотеке", () => ctx.goLibrary()),
 			h("div.where", {}, chapterLine, titleLine),
 			iconButton("toc", "Оглавление и закладки", () => openNavSheet()),
+			iconButton("search", "Поиск по книге", () => openSearchSheet()),
 			bookmarkBtn,
 			iconButton("gear", "Настройки", () => openSettingsSheet()),
 		),
@@ -268,6 +272,23 @@ function mountBook(
 			removeBookmark,
 		}),
 		);
+	}
+
+	/** Поиск по всей книге; запрос и список помнятся, пока книга открыта. */
+	function openSearchSheet(): void {
+		if (isDisposed()) return;
+		if (search) return search.focus();
+		view?.pause();
+		const sheet = openSearch({
+			paragraphs: opened.paragraphs,
+			stream,
+			sorted,
+			memo: searchMemo,
+			seek: (w) => view?.seek(w),
+			onClose: () => (search = null),
+		});
+		search = sheet;
+		sheetClosers.push(sheet.close);
 	}
 
 	function openSettingsSheet(): void {
@@ -383,6 +404,17 @@ function mountBook(
 		if (e.key === "Escape") ctx.goLibrary();
 		else if (e.key === "b" || e.key === "и") addBookmark();
 	};
+	// Ctrl+F, Cmd+F и F3 открывают наш поиск вместо браузерного (он видит только нарисованный кусок книги); в любом режиме.
+	// Чужой лист или просмотр рисунка открыты — не трогаем. По коду клавиши: на русской раскладке key — «а»
+	const onFind = (e: KeyboardEvent) => {
+		if (isDisposed()) return;
+		const find = e.key === "F3" || ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === "KeyF");
+		if (!find) return;
+		if (!search && document.querySelector(".sheet-backdrop.open, .pg-viewer")) return;
+		e.preventDefault();
+		e.stopPropagation();
+		openSearchSheet();
+	};
 	// ---- вкладка вернулась на экран: место могли сдвинуть в другом окне
 	let checking = false;
 	/** Идёт подмена записи на чужую: режим не должен записывать своё поверх. */
@@ -442,6 +474,7 @@ function mountBook(
 	};
 	const onFocus = () => void checkStored();
 	document.addEventListener("keydown", onKey);
+	document.addEventListener("keydown", onFind, true);
 	document.addEventListener("visibilitychange", onVisibility);
 	window.addEventListener("focus", onFocus);
 	window.addEventListener("pagehide", flush);
@@ -471,6 +504,7 @@ function mountBook(
 		clearTimeout(flashTimer);
 		for (const close of sheetClosers) close();
 		document.removeEventListener("keydown", onKey);
+		document.removeEventListener("keydown", onFind, true);
 		document.removeEventListener("visibilitychange", onVisibility);
 		window.removeEventListener("focus", onFocus);
 		window.removeEventListener("pagehide", flush);

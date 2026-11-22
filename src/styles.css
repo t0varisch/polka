@@ -765,6 +765,81 @@ input[type="checkbox"][role="switch"]:checked::before {
 .mark-go small {
 	flex: initial;
 }
+/* поиск по книге */
+.search-field {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	padding: 0 12px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--bg);
+	color: var(--muted);
+}
+.search-field:focus-within {
+	border-color: var(--accent);
+}
+.search-field svg {
+	flex: none;
+}
+.search-field input {
+	flex: 1;
+	min-width: 0;
+	padding: 12px 0;
+	border: 0;
+	outline: 0;
+	background: transparent;
+	color: var(--fg);
+	font-size: 16px;
+}
+.search-status {
+	min-height: 20px;
+	margin: 10px 2px 6px;
+	font-size: 14px;
+	color: var(--muted);
+}
+.search-list {
+	max-height: 52dvh;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.search-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	width: 100%;
+	padding: 10px 12px;
+	border: 0;
+	border-radius: 10px;
+	background: transparent;
+	text-align: left;
+	line-height: 1.35;
+}
+.search-item:hover {
+	background: var(--hover);
+}
+.search-item.picked {
+	background: var(--hl);
+}
+.search-text {
+	overflow-wrap: anywhere;
+}
+.search-text mark {
+	padding: 0 1px;
+	border-radius: 3px;
+	background: var(--hl);
+	color: inherit;
+	font-weight: 700;
+	box-shadow: 0 0 0 1px var(--accent);
+}
+.search-item small {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .paste {
 	display: flex;
 	flex-direction: column;

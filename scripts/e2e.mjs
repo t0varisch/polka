@@ -3,6 +3,7 @@
 // Сначала `npm run build`: скрипт без BASE сам поднимает `vite preview` на собранном dist/.
 // Рисунки: IMG_BOOK=путь.fb2 вместо BOOK — сценарий с рисунками на страницах и просмотром на весь экран.
 // Запуск: BOOK=путь.fb2 [SIZES=390x844,320x640,1280x800] [BROWSER=chromium|webkit] [BASE=http://...] [OUT=test-output] node scripts/e2e.mjs
+// Поиск по книге (searchFlow) идёт в сценарии BOOK=, не в IMG_BOOK.
 import { chromium, webkit } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
@@ -391,6 +392,140 @@ async function imgFlow(W, H, tag) {
 	await ctx.close();
 }
 
+// Три слова подряд (только буквы) из абзаца примерно на frac книги: их ищем и ждём, что книга встанет на это слово
+const pickPhrase = (p, frac) =>
+	p.evaluate(async (frac) => {
+		const id = decodeURIComponent(location.hash.split("/")[2]);
+		const rec = await new Promise((res, rej) => {
+			const o = indexedDB.open("polka");
+			o.onerror = () => rej(o.error);
+			o.onsuccess = () => {
+				const g = o.result.transaction("texts").objectStore("texts").get(id);
+				g.onsuccess = () => (o.result.close(), res(g.result));
+				g.onerror = () => rej(g.error);
+			};
+		});
+		const paras = rec.paragraphs;
+		for (let i = Math.floor(paras.length * frac); i < paras.length; i++) {
+			const w = paras[i].split(/\s+/);
+			if (w.length >= 6 && w.slice(2, 5).every((x) => /^[\p{L}]{3,}$/u.test(x))) return { phrase: w.slice(2, 5).join(" "), para: i };
+		}
+		return null;
+	}, frac);
+
+// Поиск по книге: Ctrl+F / F3 / кнопка открывают лист, найденное открывается в каждом из трёх режимов
+async function searchFlow(W, H, tag) {
+	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const page = await ctx.newPage();
+	const shot = (n) => page.screenshot({ path: `${OUT}/${tag}-search-${n}.png` });
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
+	page.on("console", (m) => m.type() === "error" && step(false, `${tag} ошибка в консоли`, m.text()));
+	const sheetOpen = () => page.$(".sheet-backdrop.open .search");
+	const inputFocused = () => page.evaluate(() => document.activeElement === document.querySelector(".search input"));
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(page, "pages", ".pg-content span[data-w]");
+		const btn = await page.evaluate(() => {
+			const r = document.querySelector('[aria-label="Поиск по книге"]').getBoundingClientRect();
+			return r.left >= 0 && r.right <= innerWidth && r.width > 0;
+		});
+		step(btn && !(await hscroll(page)), `${tag} поиск: кнопка в шапке видна, горизонтальной прокрутки нет`);
+
+		const plan = [
+			["pages", ".pg-content span[data-w]", 0.6, (p) => p.keyboard.press("Control+f")],
+			["words", ".mode-words .word .p", 0.3, (p) => p.keyboard.press("F3")],
+			["typing", ".mode-typing .tape span.cur", 0.8, (p) => p.click('[aria-label="Поиск по книге"]')],
+		];
+		for (const [mode, ready, frac, open] of plan) {
+			await toMode(page, mode, ready);
+			const pick = await pickPhrase(page, frac);
+			if (!step(!!pick, `${tag} поиск [${mode}]: фраза из трёх слов найдена`, pick ? `абзац ${pick.para}: ${pick.phrase}` : "")) throw new Error("нет фразы");
+			const before = await dw(page);
+			if (mode === "typing") await page.click(".mode-typing .tape-wrap");
+			await open(page);
+			await page.waitForSelector(".sheet-backdrop.open .search input", { timeout: 3000 });
+			await page.waitForTimeout(300);
+			step(!!(await sheetOpen()) && (await inputFocused()), `${tag} поиск [${mode}]: лист «Поиск» открыт, поле в фокусе`);
+			const query = pick.phrase.toUpperCase().replace(/Ё/g, "Е");
+			await page.keyboard.type(query, { delay: 5 });
+			await page.keyboard.press("ArrowRight");
+			await page.keyboard.press("Space");
+			await page.waitForTimeout(500);
+			step((await dw(page)) === before && (await dm(page)) === mode, `${tag} поиск [${mode}]: буквы из поля не попали в режим`, `${before} == ${await dw(page)}`);
+			// пробел после ArrowRight/Space уже в поле: стираем его, чтобы запрос остался тем же
+			await page.keyboard.press("Backspace");
+			await page.waitForTimeout(500);
+			const status = await page.textContent(".search-status");
+			const first = await page.$(".search-item");
+			if (!step(/^Найдено/.test(status ?? "") && !!first, `${tag} поиск [${mode}]: список`, status ?? "")) throw new Error("нет совпадений");
+			await shot(`1-${mode}`);
+			const target = Number(await first.getAttribute("data-word"));
+			await first.click();
+			await page.waitForTimeout(700);
+			step(!(await sheetOpen()), `${tag} поиск [${mode}]: лист закрылся после выбора`);
+			const here = await dw(page);
+			step(here === target && (await dm(page)) === mode, `${tag} поиск [${mode}]: книга на слове совпадения`, `${here} == ${target}`);
+			const first3 = pick.phrase.split(" ")[0].toLowerCase().replace(/ё/g, "е");
+			if (mode === "pages") {
+				const t = await page.evaluate(() => document.querySelector(`.pg-content span[data-w="${document.querySelector("div.book").dataset.word}"]`)?.textContent ?? "");
+				step((await onOpenPage(page)) && t.toLowerCase().replace(/ё/g, "е").includes(first3), `${tag} поиск [pages]: слово на открытой странице`, t);
+			} else if (mode === "words") {
+				const t = await page.evaluate(() => document.querySelector(".mode-words .focus .word")?.textContent ?? "");
+				step(t.toLowerCase().replace(/ё/g, "е").includes(first3), `${tag} поиск [words]: на экране слово совпадения`, t);
+			} else {
+				const t = await page.evaluate(() => {
+					const spans = [...document.querySelectorAll(".mode-typing .tape span")];
+					const i = spans.findIndex((s) => s.classList.contains("cur"));
+					return spans.slice(i, i + 60).map((s) => s.textContent).join("");
+				});
+				step(t.toLowerCase().replace(/ё/g, "е").includes(first3), `${tag} поиск [typing]: лента стоит на слове совпадения`, t.slice(0, 40));
+			}
+			// сохранённое место — то же слово, что после перехода из оглавления
+			await page.waitForTimeout(3500);
+			const saved = await page.evaluate(
+				(id) =>
+					new Promise((res, rej) => {
+						const o = indexedDB.open("polka");
+						o.onerror = () => rej(o.error);
+						o.onsuccess = () => {
+							const g = o.result.transaction("books").objectStore("books").get(id);
+							g.onsuccess = () => (o.result.close(), res(g.result?.position?.word));
+							g.onerror = () => rej(g.error);
+						};
+					}),
+				await page.evaluate(() => decodeURIComponent(location.hash.split("/")[2])),
+			);
+			step(saved === target, `${tag} поиск [${mode}]: место сохранено на слове совпадения`, `${saved} == ${target}`);
+
+			// повторное открытие: прежний запрос и отмеченное совпадение
+			if (mode === "pages") {
+				await page.keyboard.press("Control+f");
+				await page.waitForSelector(".sheet-backdrop.open .search input");
+				await page.waitForTimeout(400);
+				const re = await page.evaluate(() => {
+					const i = document.querySelector(".search input");
+					const pk = document.querySelector(".search-item.picked");
+					const l = document.querySelector(".search-list").getBoundingClientRect();
+					const r = pk?.getBoundingClientRect();
+					return { q: i.value, sel: i.selectionStart === 0 && i.selectionEnd === i.value.length, picked: !!pk, seen: !!r && r.top >= l.top - 1 && r.bottom <= l.bottom + 1 };
+				});
+				step(re.q === query && re.sel && re.picked && re.seen, `${tag} поиск: повторное открытие — запрос выделен, совпадение отмечено и видно`, JSON.stringify(re));
+				await shot("2-reopen");
+				await page.keyboard.press("Escape");
+				await page.waitForTimeout(400);
+			}
+		}
+		step(!(await hscroll(page)), `${tag} поиск: нет горизонтальной прокрутки`);
+	} catch (e) {
+		step(false, `${tag} поиск: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-search-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+}
+
 async function folderFlow(W, H, tag) {
 	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
@@ -455,6 +590,7 @@ for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
 	console.log(`## ${W}x${H}`);
 	await (IMG ? imgFlow : browserFlow)(W, H, tag);
+	if (!IMG) await searchFlow(W, H, tag);
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }
