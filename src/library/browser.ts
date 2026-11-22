@@ -1,16 +1,19 @@
 import { buildWords } from "../core/words";
 import { parseFile, parseText } from "../parsers";
-import type { BookRecord, OpenedBook, ParsedBook } from "../types";
+import type { BookImage, BookRecord, OpenedBook, ParsedBook } from "../types";
 import { db, getText, putText } from "./db";
 import { bookId } from "./hash";
 import { newRecord, shouldReplace } from "./record";
-import { staleText } from "./text";
+import { putTextSafe, staleText } from "./text";
 import type { Library, ParseProgress, ShelfItem } from "./types";
 
 /** Библиотека в браузере: записи и тексты в IndexedDB. Ключ книги — её id. */
 export class BrowserLibrary implements Library {
 	readonly kind = "browser" as const;
 	readonly name = "Браузер";
+
+	/** Рисунки книг, которые не поместились в кэш: живут до закрытия вкладки, чтобы текущий сеанс их показал. */
+	private sessionImages = new Map<string, BookImage[]>();
 
 	async list(): Promise<ShelfItem[]> {
 		const all = await (await db()).getAll("books");
@@ -25,7 +28,7 @@ export class BrowserLibrary implements Library {
 		if (!record || !text) throw new Error("Книга не найдена");
 		const opened: BookRecord = { ...record, openedAt: Date.now() };
 		await d.put("books", opened);
-		return { record: opened, paragraphs: text.paragraphs, toc: text.toc, images: text.images };
+		return { record: opened, paragraphs: text.paragraphs, toc: text.toc, images: text.images.length ? text.images : (this.sessionImages.get(key) ?? []) };
 	}
 
 	/** Свежее побеждает: запись старее сохранённой не заменяет её. Чтение и запись — в одной транзакции. */
@@ -53,7 +56,7 @@ export class BrowserLibrary implements Library {
 				// книга есть, а текст пропал или разобран до рисунков: обновляем только текст, запись не трогаем
 				try {
 					const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
-					await putText(id, book.paragraphs, book.toc, book.images ?? []);
+					await this.cacheText(id, book);
 				} catch {
 					// обновить не вышло — книга остаётся как была
 					if (!cached) throw new Error("не удалось разобрать файл");
@@ -81,7 +84,23 @@ export class BrowserLibrary implements Library {
 	private async store(id: string, book: ParsedBook): Promise<void> {
 		const wordCount = buildWords(book.paragraphs).words.length;
 		if (!wordCount) throw new Error("в файле не нашлось текста");
-		await putText(id, book.paragraphs, book.toc, book.images ?? []);
+		await this.cacheText(id, book);
 		await this.save(newRecord(id, book, wordCount));
+	}
+	/** Текст в кэш; не вышло с рисунками — без них, а рисунки остаются на сеанс. */
+	private async cacheText(id: string, book: ParsedBook): Promise<void> {
+		const images = book.images ?? [];
+		let kept = images;
+		await putTextSafe(
+			(i, paragraphs, toc, imgs) => {
+				kept = imgs;
+				return putText(i, paragraphs, toc, imgs);
+			},
+			id,
+			book.paragraphs,
+			book.toc,
+			images,
+		);
+		if (images.length && !kept.length) this.sessionImages.set(id, images);
 	}
 }

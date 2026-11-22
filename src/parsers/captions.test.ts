@@ -12,6 +12,20 @@ describe("looksLikeCaption", () => {
 		expect(looksLikeCaption("Рисовать мы будем завтра, а сегодня отдыхаем.", false)).toBe(false);
 		expect(looksLikeCaption("Картинка сразу видна, потому что мы привыкли замечать такие вещи в тексте.", false)).toBe(false);
 	});
+	it("слово подписи в длинном абзаце: подпись только с номером", () => {
+		const tail = " и дальше идёт обычное предложение, которое тянется и тянется до конца абзаца, совсем без чисел.";
+		expect(looksLikeCaption("Карта показывает, что" + tail + tail, false)).toBe(false);
+		expect(looksLikeCaption("Схема работы такова:" + tail + tail, false)).toBe(false);
+		for (const t of ["Рис. 3. Длинное описание" + tail, "Таблица 2 — данные" + tail, "Схема 1" + tail, "Fig. 4. Sleep" + tail, "Рис.5" + tail]) {
+			expect(looksLikeCaption(t, false), t).toBe(true);
+		}
+		expect(looksLikeCaption("Рис. 3. " + "а".repeat(300), false)).toBe(false);
+	});
+	it("слово подписи в строке до 120 знаков — подпись и без номера", () => {
+		expect(looksLikeCaption("Карта " + "а".repeat(100), false)).toBe(true);
+		expect(looksLikeCaption("Карта " + "а".repeat(150), false)).toBe(false);
+		expect(looksLikeCaption("Карта " + "а".repeat(150), true)).toBe(true);
+	});
 	it("короткая строка без конечной пунктуации", () => {
 		expect(looksLikeCaption("Пример ортопедической подушки", false)).toBe(true);
 	});

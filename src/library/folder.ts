@@ -3,7 +3,7 @@ import { parseFile, readBytes } from "../parsers";
 import type { BookImage, BookRecord, OpenedBook, ParsedBook, TocEntry } from "../types";
 import { getText, putText } from "./db";
 import { bookId } from "./hash";
-import { type CachedText, TEXT_VERSION, staleText } from "./text";
+import { type CachedText, TEXT_VERSION, putTextSafe, staleText } from "./text";
 import { type ProgressFile, mergeProgress, newRecord, parseProgress, serializeProgress } from "./record";
 import type { Library, ParseProgress, ShelfItem } from "./types";
 
@@ -155,7 +155,7 @@ export class FolderLibrary implements Library {
 	/** Кладёт свежий разбор в кэш и отдаёт его же как текст книги. */
 	private async cacheParsed(id: string, book: ParsedBook): Promise<CachedText> {
 		const images = book.images ?? [];
-		await this.cache.put(id, book.paragraphs, book.toc, images);
+		await putTextSafe((...a) => this.cache.put(...a), id, book.paragraphs, book.toc, images);
 		return { paragraphs: book.paragraphs, toc: book.toc, images, v: TEXT_VERSION };
 	}
 
@@ -262,7 +262,7 @@ export class FolderLibrary implements Library {
 			if (!wordCount) throw new Error("в файле не нашлось текста");
 			record = { ...newRecord(id, book as ParsedBook, wordCount, now), ...where };
 		}
-		if (book) await this.cache.put(id, text.paragraphs, text.toc, text.images);
+		if (book) await putTextSafe((...a) => this.cache.put(...a), id, text.paragraphs, text.toc, text.images);
 		await this.save(record);
 		return { record, paragraphs: text.paragraphs, toc: text.toc, images: text.images };
 	}

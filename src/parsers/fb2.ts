@@ -177,7 +177,9 @@ function holdImage(img: Element, ctx: Ctx): void {
 
 /** Атрибут title у image: непустой текст после чистки. */
 function imageTitle(img: Element): string | undefined {
-	return cleanParagraph(img.getAttribute("title") ?? "") || undefined;
+	const t = cleanParagraph(img.getAttribute("title") ?? "");
+	// длинный title ломал бы страницу с рисунком: режем так же, как абзац-подпись
+	return t.length > 300 ? `${t.slice(0, 299).trimEnd()}…` : t || undefined;
 }
 
 /** Рисунок среди блоков: если в буфере ещё нет текста — перед следующим абзацем, иначе после текущего. */

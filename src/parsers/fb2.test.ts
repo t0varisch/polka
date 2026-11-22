@@ -325,3 +325,17 @@ describe("FB2: подписи к рисункам", () => {
 		}
 	});
 });
+
+describe("title у image", () => {
+	const withTitle = (title: string) =>
+		fb2WithImages().replace(`<image l:href="#pic.png"/>`, `<image l:href="#pic.png" title="${title}"/>`);
+	it("длиннее 300 знаков режется с «…»", () => {
+		const t = parseFb2String(withTitle("а".repeat(400))).images?.find((i) => i.title)?.title as string;
+		expect(t.length).toBe(300);
+		expect(t.endsWith("…")).toBe(true);
+	});
+	it("до 300 знаков остаётся как есть", () => {
+		const t = parseFb2String(withTitle("а".repeat(300))).images?.find((i) => i.title)?.title;
+		expect(t).toBe("а".repeat(300));
+	});
+});

@@ -2,7 +2,7 @@
 // Место в книге — первое слово открытой страницы.
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
-import { fitSize, imagesByChunk, maxImageHeight } from "../../core/figures";
+import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "../../core/figures";
 import type { FontKind, Settings } from "../../settings";
 import { formatDuration, h, iconButton } from "../dom";
 import { FONT_OPTIONS, range, segmented, toggle } from "../settings-sheet";
@@ -15,6 +15,8 @@ const MAX_PAGE_W = 760;
 const WHEEL_GAP_MS = 250;
 const SWIPE_PX = 40;
 const HERE_MS = 1500;
+/** Сколько ждать decode() рисунка с неизвестным размером, мс */
+const PROBE_TIMEOUT = 4000;
 
 const FONT_FAMILY: Record<FontKind, string> = {
 	serif: '"Literata", Georgia, "Times New Roman", serif',
@@ -152,8 +154,15 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 				try {
 					const el = new Image();
 					el.src = objectUrl(ix);
-					await el.decode();
-					if (el.naturalWidth > 0 && el.naturalHeight > 0) dims[ix] = { w: el.naturalWidth, h: el.naturalHeight };
+					let fits = false;
+					// не дождались decode за срок — рисунок как битый, страницы всё равно запускаются
+					const done = await settledWithin(
+						el.decode().then(() => {
+							fits = el.naturalWidth > 0 && el.naturalHeight > 0;
+						}),
+						PROBE_TIMEOUT,
+					);
+					if (done && fits) dims[ix] = { w: el.naturalWidth, h: el.naturalHeight };
 				} catch {
 					// битый рисунок пропускаем молча
 				}
@@ -179,7 +188,18 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		img.addEventListener("error", () => {
 			if (disposed || bad.has(ix)) return;
 			bad.add(ix);
-			void relayout();
+			scheduleRelayout();
+		});
+		// EXIF-поворот: браузер показывает JPEG повёрнутым, а размер из файла — до поворота. Берём натуральный.
+		img.addEventListener("load", () => {
+			if (disposed || bad.has(ix)) return;
+			const d = dims[ix];
+			const nw = img.naturalWidth;
+			const nh = img.naturalHeight;
+			if (!d || nw <= 0 || nh <= 0) return;
+			if (Math.abs(nw / nh - d.w / d.h) / (d.w / d.h) <= 0.02) return;
+			dims[ix] = { w: nw, h: nh };
+			scheduleRelayout();
 		});
 		img.src = objectUrl(ix);
 		const box = h("div.pg-imgbox", {}, img);
@@ -438,6 +458,15 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	};
 
 	let relayoutFrame = 0;
+	/** Перекладывает не чаще кадра: ползунок шлёт десятки событий в секунду, битые рисунки — пачкой; берём последнее значение. */
+	function scheduleRelayout(): void {
+		if (typeof requestAnimationFrame !== "function") return void relayout();
+		if (relayoutFrame) return;
+		relayoutFrame = requestAnimationFrame(() => {
+			relayoutFrame = 0;
+			if (!disposed) void relayout();
+		});
+	}
 	let lastWheel = 0;
 	viewport.addEventListener(
 		"wheel",
@@ -547,13 +576,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 			];
 		},
 		applySettings() {
-			// ползунок шлёт десятки событий в секунду: перекладываем не чаще кадра, берём последнее значение
-			if (typeof requestAnimationFrame !== "function") return void relayout();
-			if (relayoutFrame) return;
-			relayoutFrame = requestAnimationFrame(() => {
-				relayoutFrame = 0;
-				if (!disposed) void relayout();
-			});
+			scheduleRelayout();
 		},
 		destroy() {
 			disposed = true;

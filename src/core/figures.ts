@@ -43,3 +43,20 @@ export function fitSize(w: number, h: number, maxW: number, maxH: number): { w: 
 	const k = Math.min(1, maxW / w, maxH / h);
 	return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)) };
 }
+
+/** Ждёт p не дольше ms миллисекунд; не дождались — false (зависший decode не держит запуск страниц). */
+export function settledWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => resolve(false), ms);
+		p.then(
+			() => {
+				clearTimeout(timer);
+				resolve(true);
+			},
+			() => {
+				clearTimeout(timer);
+				resolve(true);
+			},
+		);
+	});
+}

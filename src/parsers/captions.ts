@@ -3,8 +3,12 @@ import type { BookImage } from "../types";
 
 const MAX_CAPTION = 300;
 const MAX_SHORT = 80;
+/** Не размеченный книгой абзац со словом подписи без номера — не длиннее */
+const MAX_WORD = 120;
 /** Слово подписи в начале: «Рис. 1», «Таблица 2», «Figure 3» */
 const WORD_RE = /^(рис\.?|рисунок|илл\.?|иллюстрация|схема|табл\.?|таблица|график|диаграмма|фото|карта|fig\.?|figure|table)(\s|\d|$)/i;
+/** Слово подписи и номер за ним: «Рис. 3», «Таблица 2», «Fig. 4» */
+const NUM_RE = /^(рис.?|рисунок|илл.?|иллюстрация|схема|табл.?|таблица|график|диаграмма|фото|карта|fig.?|figure|table)s*d/i;
 const END_RE = /[.!?…:;,]$/;
 const LIST_RE = /^([•\-–—*]|\d+[.)]\s)/;
 
@@ -16,7 +20,8 @@ export function looksLikeCaption(text: string, marked: boolean): boolean {
 	const t = text.trim();
 	if (!t || t.length > MAX_CAPTION) return false;
 	if (marked) return true;
-	if (WORD_RE.test(t)) return true;
+	// слово подписи: длинный абзац без номера — обычное предложение («Карта показывает, что …»)
+	if (WORD_RE.test(t) && (t.length <= MAX_WORD || NUM_RE.test(t))) return true;
 	return t.length <= MAX_SHORT && !END_RE.test(t) && !LIST_RE.test(t);
 }
 

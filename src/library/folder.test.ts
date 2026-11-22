@@ -393,3 +393,52 @@ describe("FolderLibrary: рисунки и устаревший кэш", () => {
 		expect(cache.m.get(id)?.v).toBe(1);
 	});
 });
+
+describe("FolderLibrary: кэш не принимает рисунки", () => {
+	/** Кэш, который бросает на непустом списке рисунков (нет места, сбой клонирования). */
+	const stingy = () => {
+		const cache = memCache();
+		const put = cache.put;
+		cache.put = async (id, paragraphs, toc, images) => {
+			if (images.length) throw new DOMException("quota", "QuotaExceededError");
+			await put(id, paragraphs, toc, images);
+		};
+		return cache;
+	};
+
+	it("open по f:: книга открывается с рисунками, текст в кэше, рисунков в кэше нет", async () => {
+		const fs = createMemFs();
+		fs.put("Рис.fb2", utf8(fb2WithImages()));
+		const cache = stingy();
+		const lib = new FolderLibrary(asDirHandle(fs), cache);
+		const first = await lib.open("f:Рис.fb2");
+		expect(first.images.length).toBeGreaterThan(0);
+		const cached = cache.m.get(first.record.id);
+		expect(cached?.paragraphs).toEqual(first.paragraphs);
+		expect(cached?.images).toEqual([]);
+	});
+
+	it("open по ключу при устаревшем кэше: рисунки в сеансе есть, в кэше их нет", async () => {
+		const fs = createMemFs();
+		fs.put("Рис.fb2", utf8(fb2WithImages()));
+		const ok = memCache();
+		const first = await new FolderLibrary(asDirHandle(fs), ok).open("f:Рис.fb2");
+		const id = first.record.id;
+		const t = ok.m.get(id) as CachedText;
+		const cache = stingy();
+		cache.m.set(id, { paragraphs: t.paragraphs, toc: t.toc, images: [], v: 1 });
+		const again = await new FolderLibrary(asDirHandle(fs), cache).open(id);
+		expect(again.images.length).toBe(first.images.length);
+		expect(cache.m.get(id)?.images).toEqual([]);
+	});
+
+	it("если не пишется и пустой список — ошибка не глотается", async () => {
+		const fs = createMemFs();
+		fs.put("Рис.fb2", utf8(fb2WithImages()));
+		const cache = memCache();
+		cache.put = async () => {
+			throw new Error("диск");
+		};
+		await expect(new FolderLibrary(asDirHandle(fs), cache).open("f:Рис.fb2")).rejects.toThrow("диск");
+	});
+});

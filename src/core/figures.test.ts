@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { BookImage } from "../types";
 import type { Chunk } from "./chunks";
-import { fitSize, imagesByChunk, maxImageHeight } from "./figures";
+import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "./figures";
 
 const chunks: Chunk[] = [
 	{ fromPara: 0, toPara: 10, fromWord: 0, toWord: 100 },
@@ -72,5 +72,19 @@ describe("fitSize", () => {
 	it("целые пиксели", () => {
 		const r = fitSize(333, 777, 100, 100);
 		expect(Number.isInteger(r.w) && Number.isInteger(r.h)).toBe(true);
+	});
+});
+
+describe("settledWithin", () => {
+	it("зависший промис: через срок false", async () => {
+		vi.useFakeTimers();
+		const r = settledWithin(new Promise(() => {}), 4000);
+		await vi.advanceTimersByTimeAsync(4000);
+		expect(await r).toBe(false);
+		vi.useRealTimers();
+	});
+	it("завершился или отклонён вовремя: true", async () => {
+		expect(await settledWithin(Promise.resolve(1), 4000)).toBe(true);
+		expect(await settledWithin(Promise.reject(new Error("x")), 4000)).toBe(true);
 	});
 });
