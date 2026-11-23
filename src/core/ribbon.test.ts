@@ -189,6 +189,12 @@ describe("locateCell", () => {
 		expect(locateCell(grids, 220)).toEqual({ chunk: 0, cell: 2 });
 	});
 
+	it("допуск на округление: целый scrollTop на пиксель ниже верха ячейки — уже в ней", () => {
+		const grids = [[0, 90.79, 180.4]];
+		expect(locateCell(grids, 90)).toEqual({ chunk: 0, cell: 0 });
+		expect(locateCell(grids, 90, 1)).toEqual({ chunk: 0, cell: 1 });
+	});
+
 	it("кусок без страниц пропускается", () => {
 		const grids = [[0, 90], [], [200]];
 		expect(locateCell(grids, 150)).toEqual({ chunk: 0, cell: 1 });

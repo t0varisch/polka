@@ -40,6 +40,8 @@ const MARGIN_SCREENS = 1.5;
 const IDLE_MS = 150;
 /** Сторож цели плавной прокрутки: сколько ждать, если она замолчала, не доехав. */
 const GUARD_MS = 400;
+/** WebKit отдаёт scrollTop целым и отбрасывает дробную часть (цель 3343.79 — стоим на 3343): верх ячейки в пределах пикселя считается достигнутым. */
+const SCROLL_ROUND = 1;
 /** На сколько экранов цель листания может уйти вперёд от прокрутки, пока та не догнала. */
 const MAX_AHEAD = 3;
 /** Касание в такое время после прокрутки считается остановкой прокрутки, а не листанием, мс. */
@@ -395,6 +397,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		const at = locateCell(
 			loaded.map((l) => l.grid.map((g) => l.top + g)),
 			win.scrollTop,
+			SCROLL_ROUND,
 		);
 		let n = pageNums.startOf(chunkOfWord(chunks, anchor)) + 1;
 		if (at) n = pageNums.startOf(loaded[at.chunk].i) + at.cell + 1;
@@ -602,6 +605,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 				// прокрутка не наша (палец, колесо, клавиши браузера): прежние экраны уже не те
 				if (Math.abs(win.scrollTop - settledTop) > 1) stack = [];
 			} else if (Math.abs(win.scrollTop - progTarget) < 1) {
+				// подвал верен к моменту, когда окно доложило «стоит»: кадр обновления может прийти позже
+				updatePlace();
 				setProg(null);
 				settledTop = win.scrollTop;
 			}

@@ -106,12 +106,13 @@ export function chainStart(lineTops: number[], lineBottoms: number[], prevCellTo
 /**
  * Ячейка, в которой стоит прокрутка pos: последняя, чей верх не ниже pos (с допуском). grids — верхи ячеек кусков подряд в общих
  * координатах. Выше самой первой ячейки — она же. Ячеек нет совсем — null.
+ * eps — допуск на округление прокрутки: WebKit отдаёт scrollTop целым и отбрасывает дробную часть (3343 вместо 3343.79).
  */
-export function locateCell(grids: number[][], pos: number): { chunk: number; cell: number } | null {
+export function locateCell(grids: number[][], pos: number, eps = EPS): { chunk: number; cell: number } | null {
 	let best: { chunk: number; cell: number } | null = null;
 	for (let c = 0; c < grids.length; c++) {
 		for (let k = 0; k < grids[c].length; k++) {
-			if (grids[c][k] > pos + EPS) return best ?? { chunk: c, cell: k };
+			if (grids[c][k] > pos + eps) return best ?? { chunk: c, cell: k };
 			best = { chunk: c, cell: k };
 		}
 	}

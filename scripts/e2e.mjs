@@ -1603,6 +1603,12 @@ console.log(`# ${BROWSER}, книга ${basename(BOOK)}, ${base}, снимки �
 for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
 	console.log(`## ${W}x${H}`);
+	if (process.env.ONLY === "ribbon") {
+		await pageNumberFlow(W, H, tag);
+		await markFlow(W, H, tag);
+		await (IMG ? ribbonImgFlow : ribbonFlow)(W, H, tag);
+		continue;
+	}
 	await (IMG ? imgFlow : browserFlow)(W, H, tag);
 	if (!IMG) await searchFlow(W, H, tag);
 	await pageNumberFlow(W, H, tag);
