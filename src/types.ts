@@ -58,6 +58,10 @@ export interface Bookmark {
 	word: number;
 	snippet: string;
 	createdAt: number;
+	/** Последнее слово выделенного отрывка (закладка из выделения). */
+	end?: number;
+	/** Выделенный текст в одну строку. */
+	quote?: string;
 }
 
 /** Запись о книге — один формат и в папке (.polka/progress.json), и в браузере. */

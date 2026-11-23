@@ -67,6 +67,14 @@
 	border-radius: 3px;
 	box-shadow: 0 0 0 2px var(--hl);
 }
+/* цитата из закладки: мягкий фон (цвет акцента на фоне страницы, без прозрачности — нет тёмных стыков), текст не сдвигается;
+   пробел перед соседним выделенным словом закрывает тень этого слова */
+.mode-pages .pg-content span.pg-mark {
+	background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+}
+.mode-pages .pg-content span.pg-mark + span.pg-mark {
+	box-shadow: -0.26em 0 0 color-mix(in srgb, var(--accent) 18%, var(--bg));
+}
 .mode-pages .pg-foot {
 	padding: 8px 20px calc(10px + var(--safe-bottom));
 	font-size: 13px;

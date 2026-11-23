@@ -1,7 +1,7 @@
 // Договор между оболочкой книги и режимами чтения. Общая единица места — индекс слова в stream.words
 import type { WordStream } from "../../core/words";
 import type { Settings } from "../../settings";
-import type { BookRecord, OpenedBook } from "../../types";
+import type { Bookmark, BookRecord, OpenedBook } from "../../types";
 
 export interface ModeHost {
 	book: OpenedBook;
@@ -14,6 +14,8 @@ export interface ModeHost {
 	/** Сохранить сейчас. */
 	flush(): void;
 	addBookmark(): void;
+	/** Закладки книги: режим подсвечивает те, у которых есть end. */
+	bookmarks(): Bookmark[];
 	openNav(): void;
 	/** Лист настроек (общие + строки режима). */
 	openSettings(): void;
@@ -29,6 +31,10 @@ export interface ModeView {
 	seek(word: number): void;
 	/** Перед листом настроек или навигации. */
 	pause(): void;
+	/** Выделенный в режиме текст: слова от from до to и сама цитата; нет выделения — null. */
+	selection?(): { from: number; to: number; text: string } | null;
+	/** Закладки добавили или удалили: перерисовать подсветку. */
+	marksChanged?(): void;
 	/** Строки настроек своего режима. */
 	settingsRows(): HTMLElement[];
 	applySettings(): void;

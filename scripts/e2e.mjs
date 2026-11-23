@@ -936,6 +936,108 @@ async function animFlow(W, H, tag) {
 	await ctx2.close();
 }
 
+// Закладка из выделенного текста: цитата в списке, подсветка pg-mark, выделение снято — закладка с цитатой ещё 2 с
+async function markFlow(W, H, tag) {
+	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const page = await ctx.newPage();
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
+	page.on("console", (m) => m.type() === "error" && step(false, `${tag} ошибка в консоли`, m.text()));
+	const marked = () => page.evaluate(() => [...document.querySelectorAll(".pg-content span.pg-mark")].map((e) => Number(e.dataset.w)));
+	// Выделить слова a..b программно (Range от одного span[data-w] до другого)
+	const select = (a, b) =>
+		page.evaluate(([a, b]) => {
+			const r = document.createRange();
+			r.setStartBefore(document.querySelector(`.pg-content span[data-w="${a}"]`));
+			r.setEndAfter(document.querySelector(`.pg-content span[data-w="${b}"]`));
+			const sel = getSelection();
+			sel.removeAllRanges();
+			sel.addRange(r);
+			return r.toString().replace(/\s+/g, " ").trim();
+		}, [a, b]);
+	const bookmarkTexts = async () => {
+		await page.click('[aria-label="Оглавление и закладки"]');
+		await page.waitForSelector(".sheet-backdrop");
+		await page.click('.sheet-backdrop [role="tab"]:nth-of-type(2)');
+		const out = await page.evaluate(() => [...document.querySelectorAll(".sheet-backdrop .mark-go > span")].map((e) => ({ t: e.textContent, quote: e.classList.contains("mark-quote") })));
+		return out;
+	};
+	const closeNav = async () => {
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(300);
+	};
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(page, "pages", ".pg-content span[data-w]");
+		for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+		await settle(page);
+		await page.waitForTimeout(300);
+		// шесть слов подряд должны быть в открытом куске: у короткой главы берём последние шесть
+		const w0 = await page.evaluate(() => {
+			const w = Number(document.querySelector("div.book").dataset.word);
+			if (document.querySelector(`.pg-content span[data-w="${w + 5}"]`)) return w;
+			return Math.max(...[...document.querySelectorAll(".pg-content span[data-w]")].map((e) => Number(e.dataset.w))) - 5;
+		});
+		const quote = await select(w0, w0 + 5);
+		await page.waitForTimeout(150);
+		await page.click('[aria-label="Закладка здесь"]');
+		await page.waitForTimeout(400);
+		const m1 = await marked();
+		step(m1.length === 6 && m1[0] === w0 && m1[5] === w0 + 5, `${tag} закладка-цитата: на странице подсвечены 6 слов`, m1.join(","));
+		step(await page.evaluate(() => getSelection().isCollapsed), `${tag} закладка-цитата: выделение снято`);
+		step((await page.textContent("#toast")) === "Цитата в закладках", `${tag} закладка-цитата: тост «Цитата в закладках»`);
+		await page.screenshot({ path: `${OUT}/${tag}-mark-page.png` });
+		let list = await bookmarkTexts();
+		step(list.length === 1 && list[0].quote && list[0].t === `«${quote}»`, `${tag} закладка-цитата: в списке «цитата»`, JSON.stringify(list));
+		await page.screenshot({ path: `${OUT}/${tag}-mark-list.png` });
+		step(!(await hscroll(page)), `${tag} закладка-цитата: нет горизонтальной прокрутки`);
+		await closeNav();
+		await page.waitForTimeout(3500); // запись
+		await page.reload();
+		await page.waitForSelector(".pg-content span[data-w]", { timeout: 30000 });
+		await page.waitForTimeout(700);
+		const m2 = await marked();
+		step(m2.length === 6 && m2[0] === w0, `${tag} закладка-цитата: после перезагрузки подсветка на месте`, m2.join(","));
+		list = await bookmarkTexts();
+		step(list.length === 1 && list[0].quote && list[0].t === `«${quote}»`, `${tag} закладка-цитата: после перезагрузки цитата на месте`);
+		// удаление
+		await page.click('.sheet-backdrop [aria-label="Удалить закладку"]');
+		await page.waitForTimeout(200);
+		await closeNav();
+		step((await marked()).length === 0, `${tag} закладка-цитата: после удаления pg-mark нет`);
+		// выделил, снял, в течение 1 с — закладка с цитатой
+		const w1 = w0;
+		const q2 = await select(w1, w1 + 2);
+		await page.waitForTimeout(300);
+		await page.evaluate(() => getSelection().removeAllRanges());
+		await page.waitForTimeout(500);
+		await page.click('[aria-label="Закладка здесь"]');
+		await page.waitForTimeout(300);
+		step((await marked()).length === 3, `${tag} закладка-цитата: выделение снято меньше секунды назад — закладка с цитатой`, String((await marked()).length));
+		list = await bookmarkTexts();
+		step(list.length === 1 && list[0].quote && list[0].t === `«${q2}»`, `${tag} закладка-цитата: в списке цитата`);
+		await page.click('.sheet-backdrop [aria-label="Удалить закладку"]');
+		await closeNav();
+		// через 3 с — обычная
+		await select(w1, w1 + 2);
+		await page.waitForTimeout(200);
+		await page.evaluate(() => getSelection().removeAllRanges());
+		await page.waitForTimeout(3000);
+		await page.click('[aria-label="Закладка здесь"]');
+		await page.waitForTimeout(300);
+		step((await marked()).length === 0 && (await page.textContent("#toast")) === "Закладка добавлена", `${tag} закладка-цитата: через 3 с после снятия — обычная закладка`);
+		list = await bookmarkTexts();
+		step(list.length === 1 && !list[0].quote && list[0].t.endsWith("…"), `${tag} закладка-цитата: обычная закладка в списке как раньше`, JSON.stringify(list));
+		step(!(await hscroll(page)), `${tag} закладка-цитата: список без горизонтальной прокрутки`);
+	} catch (e) {
+		step(false, `${tag} закладка-цитата: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-mark-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+}
+
 console.log(`# ${BROWSER}, книга ${basename(BOOK)}, ${base}, снимки в ${OUT}`);
 for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
@@ -945,6 +1047,7 @@ for (const [W, H] of SIZES) {
 	await pageNumberFlow(W, H, tag);
 	await ticksFlow(W, H, tag);
 	if (!IMG) await animFlow(W, H, tag);
+	await markFlow(W, H, tag);
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }

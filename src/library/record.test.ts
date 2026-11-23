@@ -99,3 +99,29 @@ describe("shouldReplace", () => {
 		expect(shouldReplace({ updatedAt: 6 }, { updatedAt: 5 })).toBe(false);
 	});
 });
+
+describe("закладки: цитата и конец", () => {
+	const withMarks = (bookmarks: unknown[]) => JSON.stringify({ version: 1, books: { A: { ...rec("A", 1), bookmarks } } });
+	const mark = { id: "m", word: 5, snippet: "раз", createdAt: 1 };
+
+	it("закладка с end и quote проходит как есть", () => {
+		const out = parseProgress(withMarks([{ ...mark, end: 9, quote: "раз два" }]));
+		expect(out.books.A.bookmarks[0]).toMatchObject({ end: 9, quote: "раз два" });
+		expect(out.foreign).toBeUndefined();
+	});
+	it("end меньше word — поле отброшено, запись цела", () => {
+		const out = parseProgress(withMarks([{ ...mark, end: 3, quote: "раз" }]));
+		expect(out.books.A.bookmarks[0].end).toBeUndefined();
+		expect(out.books.A.bookmarks[0].quote).toBe("раз");
+		expect(out.foreign).toBeUndefined();
+	});
+	it("end не число и quote не строка — поля отброшены", () => {
+		const out = parseProgress(withMarks([{ ...mark, end: "9", quote: 5 }]));
+		expect(out.books.A.bookmarks[0]).toEqual(mark);
+		expect(out.foreign).toBeUndefined();
+	});
+	it("старая закладка без полей проходит", () => {
+		const out = parseProgress(withMarks([mark]));
+		expect(out.books.A.bookmarks[0]).toEqual(mark);
+	});
+});

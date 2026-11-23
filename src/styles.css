@@ -802,6 +802,15 @@ input[type="checkbox"][role="switch"]:checked::before {
 .mark-go small {
 	flex: initial;
 }
+/* цитата в закладке: не больше трёх строк */
+.mark-quote {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	line-clamp: 3;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+}
 /* поиск по книге */
 .search-field {
 	display: flex;

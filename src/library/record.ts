@@ -1,6 +1,6 @@
 import { snippetAt } from "../core/anchor";
 import { buildWords } from "../core/words";
-import type { BookRecord, ParsedBook } from "../types";
+import type { Bookmark, BookRecord, ParsedBook } from "../types";
 
 export interface ProgressFile {
 	version: 1;
@@ -73,6 +73,14 @@ export function isBookRecord(v: unknown): v is BookRecord {
 	return isObj(t) && isNum(t.correct) && isNum(t.errors) && isNum(t.activeMs);
 }
 
+/** Необязательные поля закладки: неверные отбрасываются, сама закладка остаётся. */
+function cleanBookmark(b: Bookmark): Bookmark {
+	const out: Bookmark = { ...b };
+	if (out.end !== undefined && !(isNum(out.end) && out.end >= out.word)) delete out.end;
+	if (out.quote !== undefined && typeof out.quote !== "string") delete out.quote;
+	return out;
+}
+
 /** Содержимое progress.json. Не JSON или чужая версия — ProgressError (молча заменить пустым нельзя). Непонятные записи сохраняются в `foreign`. */
 export function parseProgress(json: string): ProgressFile {
 	let v: unknown;
@@ -85,7 +93,10 @@ export function parseProgress(json: string): ProgressFile {
 	const books: Record<string, BookRecord> = {};
 	const foreign: Record<string, unknown> = {};
 	for (const [k, rec] of Object.entries(v.books)) {
-		if (isBookRecord(rec) && rec.id === k) books[k] = rec;
+		if (isBookRecord(rec) && rec.id === k) {
+			rec.bookmarks = rec.bookmarks.map(cleanBookmark);
+			books[k] = rec;
+		}
 		else foreign[k] = rec;
 	}
 	const out: ProgressFile = { version: 1, books };

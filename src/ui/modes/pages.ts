@@ -3,6 +3,7 @@
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
 import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "../../core/figures";
+import { cleanQuote } from "../../core/quote";
 import { estimateChunkPages, PageNumbers, paraLines } from "../../core/pagecount";
 import { swipeDecision } from "../../core/swipe";
 import type { FontKind, Settings } from "../../settings";
@@ -17,6 +18,8 @@ const MAX_PAGE_W = 760;
 const WHEEL_GAP_MS = 250;
 const SWIPE_PX = 40;
 const HERE_MS = 1500;
+/** Сколько после снятия выделения оно ещё считается выделением для закладки, мс */
+const SEL_KEEP_MS = 2000;
 /** Сколько ждать decode() рисунка с неизвестным размером, мс */
 const PROBE_TIMEOUT = 4000;
 
@@ -328,6 +331,18 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		content.replaceChildren(frag);
 		chunkIdx = i;
 		fitCaptions();
+		paintMarks();
+	}
+
+	/** Подсветка закладок-цитат: слова от word до end каждой закладки с end в открытом куске. */
+	function paintMarks(): void {
+		for (const el of content.querySelectorAll("span.pg-mark")) el.classList.remove("pg-mark");
+		const c = chunks[chunkIdx];
+		if (!c) return;
+		for (const b of host.bookmarks()) {
+			if (b.end === undefined || b.end < c.fromWord || b.word >= c.toWord) continue;
+			for (let w = Math.max(b.word, c.fromWord); w <= Math.min(b.end, c.toWord - 1); w++) spans[w - c.fromWord]?.classList.add("pg-mark");
+		}
 	}
 
 	/** Страницы куска (слова и рисунки), первое слово каждой страницы. */
@@ -675,6 +690,36 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 
 	document.addEventListener("keydown", onKey);
 
+	// Последнее выделение внутри страницы: кнопка закладки на телефоне снимает его раньше, чем срабатывает
+	let lastSel: { range: Range; at: number } | null = null;
+	const onSelectionChange = () => {
+		const sel = window.getSelection();
+		if (!sel || sel.rangeCount === 0) return;
+		if (sel.isCollapsed) return;
+		const r = sel.getRangeAt(0);
+		lastSel = content.contains(r.commonAncestorContainer) ? { range: r.cloneRange(), at: performance.now() } : null;
+	};
+	document.addEventListener("selectionchange", onSelectionChange);
+
+	/** Слова страницы, которых касается выделение: от первого до последнего. */
+	function wordsOf(r: Range): { from: number; to: number } | null {
+		const c = chunks[chunkIdx];
+		if (!c) return null;
+		let from = -1;
+		let to = -1;
+		for (let k = 0; k < spans.length; k++) {
+			const sp = spans[k];
+			if (!sp || !r.intersectsNode(sp)) continue;
+			// граница выделения ровно на краю слова — слово не считается
+			const t = sp.firstChild;
+			if (from < 0 && r.startContainer === t && r.startOffset >= (t?.textContent?.length ?? 0)) continue;
+			if (r.endContainer === t && r.endOffset === 0) continue;
+			if (from < 0) from = c.fromWord + k;
+			to = c.fromWord + k;
+		}
+		return from < 0 ? null : { from, to };
+	}
+
 	// Раскладка известна только после вставки в страницу: первый показ делает наблюдатель за размером окна
 	const onResize = () => {
 		if (viewport.clientWidth === laidW && viewport.clientHeight === laidH) return;
@@ -703,6 +748,21 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 			host.report(anchor);
 		},
 		pause() {},
+		selection() {
+			if (chunkIdx < 0) return null;
+			const sel = window.getSelection();
+			let r: Range | null = null;
+			if (sel && !sel.isCollapsed && sel.rangeCount > 0 && content.contains(sel.getRangeAt(0).commonAncestorContainer)) r = sel.getRangeAt(0);
+			else if (lastSel && performance.now() - lastSel.at <= SEL_KEEP_MS && content.contains(lastSel.range.commonAncestorContainer)) r = lastSel.range;
+			if (!r) return null;
+			const text = cleanQuote(r.toString());
+			const ws = wordsOf(r);
+			return text && ws ? { ...ws, text } : null;
+		},
+		marksChanged() {
+			lastSel = null;
+			paintMarks();
+		},
 		settingsRows() {
 			const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
 				s[k] = v;

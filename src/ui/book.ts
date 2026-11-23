@@ -241,15 +241,22 @@ function mountBook(
 
 	function addBookmark(): void {
 		if (isDisposed()) return;
-		const word = view ? view.word() : record.position.word;
+		const sel = view?.selection?.() ?? null;
+		const word = sel ? sel.from : view ? view.word() : record.position.word;
 		const b: Bookmark = { id: newId(), word, createdAt: Date.now(), snippet: snippetAt(stream, word, 9) };
+		if (sel) {
+			b.end = sel.to;
+			b.quote = sel.text;
+			window.getSelection()?.removeAllRanges();
+		}
 		record.bookmarks = [...record.bookmarks, b].sort((x, y) => x.word - y.word);
 		touch();
 		flush();
+		view?.marksChanged?.();
 		bookmarkBtn.classList.add("flash");
 		clearTimeout(flashTimer);
 		flashTimer = setTimeout(() => bookmarkBtn.classList.remove("flash"), 600);
-		toast("Закладка добавлена");
+		toast(sel ? "Цитата в закладках" : "Закладка добавлена");
 	}
 
 	function removeBookmark(id: string): void {
@@ -257,6 +264,7 @@ function mountBook(
 		record.bookmarks = record.bookmarks.filter((x) => x.id !== id);
 		touch();
 		flush();
+		view?.marksChanged?.();
 	}
 
 	function openNavSheet(): void {
@@ -307,6 +315,7 @@ function mountBook(
 			if (!isDisposed()) flush();
 		},
 		addBookmark,
+		bookmarks: () => record.bookmarks,
 		openNav: openNavSheet,
 		openSettings: openSettingsSheet,
 		goLibrary: () => ctx.goLibrary(),
@@ -460,6 +469,7 @@ function mountBook(
 	function adopt(stored: BookRecord): void {
 		record.position = stored.position;
 		record.bookmarks = stored.bookmarks;
+		view?.marksChanged?.();
 		record.typing = stored.typing;
 		record.updatedAt = stored.updatedAt;
 		record.openedAt = stored.openedAt;

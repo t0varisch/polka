@@ -122,7 +122,7 @@ export function openNav(ctx: NavCtx): () => void {
 								close();
 							},
 						},
-						h("span", {}, `${b.snippet}…`),
+						b.quote ? h("span.mark-quote", {}, `«${b.quote}»`) : h("span", {}, `${b.snippet}…`),
 						h("small", {}, `${Math.round(pctOf(b.word))}%${ch ? ` · ${ch.title}` : ""}`),
 					),
 					iconButton("trash", "Удалить закладку", () => {
