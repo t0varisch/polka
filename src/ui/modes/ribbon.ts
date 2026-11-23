@@ -38,6 +38,10 @@ const MAX_CHUNKS = 3;
 const MARGIN_SCREENS = 1.5;
 /** Прокрутка стоит столько — можно убрать дальний кусок, мс. */
 const IDLE_MS = 150;
+/** Сторож цели плавной прокрутки: сколько ждать, если она замолчала, не доехав. */
+const GUARD_MS = 400;
+/** На сколько экранов цель листания может уйти вперёд от прокрутки, пока та не догнала. */
+const MAX_AHEAD = 3;
 /** Касание в такое время после прокрутки считается остановкой прокрутки, а не листанием, мс. */
 const SCROLLING_MS = 120;
 /** Строка с верхом выше края окна не больше чем на это считается видимой целиком, px. */
@@ -91,7 +95,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	const pc = createPagesContent({ host, chunks, tocSet, onRelayout: () => scheduleRelayout() });
 
 	const content = h("div.rb-content", { lang });
-	const win = h("div.rb-window", {}, content);
+	const win = h("div.rb-window", { "data-settled": "1" }, content);
 	const foot = h("footer.pg-foot");
 	const view = h("div.mode-pages.mode-ribbon", {}, win, foot);
 
@@ -257,21 +261,24 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	}
 
 	/** Убирает крайний кусок; если убран верхний, прокрутка поправляется. */
-	function unmount(at: "end" | "start"): void {
+	function unmount(at: "end" | "start"): number {
 		const l = at === "start" ? loaded[0] : loaded[loaded.length - 1];
-		if (!l) return;
+		if (!l) return 0;
 		const ref = at === "start" ? loaded[1]?.section : undefined;
 		const before = ref ? ref.getBoundingClientRect().top : 0;
 		l.section.remove();
 		if (at === "start") loaded.shift();
 		else loaded.pop();
 		flat = null;
-		if (!ref) return;
+		if (!ref) return 0;
 		const delta = ref.getBoundingClientRect().top - before;
 		if (delta !== 0) {
 			setScrollTop(win.scrollTop + delta);
 			shiftCoords(delta);
+			// экраны из убранного куска остались выше начала окна: туда «назад» уже не вернёт ровно
+			stack = stack.filter((v) => v >= 0);
 		}
+		return delta;
 	}
 
 	function clearLoaded(): void {
@@ -283,7 +290,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/**
 	 * Дописывает куски, чтобы вокруг экрана с верхом pos было не меньше полутора экранов текста.
 	 * prepend=false — сверху не добавлять (идёт плавная прокрутка, поправка scrollTop её сорвала бы).
-	 * Возвращает, на сколько сдвинулось содержимое из-за добавленного сверху: pos и верха экранов надо сдвинуть так же.
+	 * Лишние куски (больше трёх), далёкие и от экрана с верхом pos, и от видимого, тут же убираются: зажатая клавиша листания иначе копила бы их.
+	 * Возвращает, на сколько сдвинулось содержимое из-за добавленного сверху и убранного: pos и верха экранов надо сдвинуть так же.
 	 */
 	function fill(pos: number, prepend = true): number {
 		if (loaded.length === 0) return 0;
@@ -295,23 +303,39 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			pos += d;
 			shifted += d;
 		}
-		return shifted;
+		const d = trim(pos, margin);
+		// убран верхний кусок: поправка scrollTop оборвала нашу плавную прокрутку, запускаем заново к сдвинутой цели
+		if (d !== 0 && progTarget !== null) win.scrollTo({ top: progTarget, behavior: "smooth" });
+		return shifted + d;
 	}
 
-	/** Убирает дальние куски, пока их больше трёх: тот конец, что дальше от середины экрана. Кусок, видимый на экране, не трогается. */
-	function trim(): void {
+	/**
+	 * Убирает дальние куски, пока их больше трёх: тот конец, что дальше от середины экрана с верхом pos.
+	 * Куски, видимые на экране pos (плюс reach с краёв: запас, что дописал fill) или на экране прокрутки сейчас, не трогаются. Возвращает сдвиг содержимого от убранного сверху.
+	 */
+	function trim(pos: number, reach = 0): number {
+		let shifted = 0;
 		while (loaded.length > MAX_CHUNKS) {
 			index();
 			const st = win.scrollTop;
-			const mid = st + H / 2;
+			const mid = pos + H / 2;
 			let k = loaded.findIndex((l) => mid < l.top + l.height);
 			if (k < 0) k = loaded.length - 1;
-			const visible = (l: Loaded) => l.top < st + H && l.top + l.height > st;
+			const visible = (l: Loaded) => (l.top < st + H && l.top + l.height > st) || (l.top < pos + H + reach && l.top + l.height > pos - reach);
 			const order: ("start" | "end")[] = k > loaded.length - 1 - k ? ["start", "end"] : ["end", "start"];
 			const at = order.find((o) => !visible(o === "start" ? loaded[0] : loaded[loaded.length - 1]));
-			if (!at) return;
-			unmount(at);
+			if (!at) break;
+			const d = unmount(at);
+			shifted += d;
+			pos += d;
 		}
+		return shifted;
+	}
+
+	/** Ставит или снимает цель своей плавной прокрутки; окно сообщает, закончила ли она (для проверок). */
+	function setProg(v: number | null): void {
+		progTarget = v;
+		win.dataset.settled = v === null ? "1" : "0";
 	}
 
 	// ---- место, подвал
@@ -380,7 +404,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		const ix = index();
 		const k = Math.max(0, lowerBound(ix.words, w + 1) - 1);
 		stack = [];
-		progTarget = null;
+		setProg(null);
 		// у начала книги видна и обложка, что стоит перед первым словом
 		setScrollTop(w === 0 ? 0 : (ix.tops[k] ?? 0));
 		settledTop = win.scrollTop;
@@ -442,10 +466,12 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/** Экран вперёд или назад. Идущая плавная прокрутка продолжается от её цели. */
 	function turn(dir: 1 | -1): void {
 		if (disposed || viewer.isOpen() || loaded.length === 0) return;
+		// цель не убегает дальше трёх экранов от прокрутки: зажатая клавиша иначе копила бы куски между ними
+		if (progTarget !== null && Math.abs(progTarget - win.scrollTop) > MAX_AHEAD * H) return;
 		// выделение осталось бы на ушедшем экране: закладка взяла бы цитату, которой уже не видно
 		pgSel.clear();
 		window.getSelection()?.removeAllRanges();
-		fill(progTarget ?? win.scrollTop);
+		fill(progTarget ?? win.scrollTop, progTarget === null);
 		const base = progTarget ?? win.scrollTop;
 		const ix = index();
 		let t: number;
@@ -469,22 +495,26 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 
 	/** Едет к верху t плавно (или сразу при «уменьшить движение»); куски вокруг цели дописываются до начала движения. */
 	function scrollToTarget(t: number): void {
-		t += fill(t);
+		// во время своей плавной прокрутки сверху не дописываем: поправка scrollTop оборвала бы её
+		t += fill(t, progTarget === null);
 		if (reducedMotion()) {
-			progTarget = null;
+			setProg(null);
 			setScrollTop(t);
 			settledTop = win.scrollTop;
 			return;
 		}
-		progTarget = t;
+		setProg(t);
 		win.scrollTo({ top: t, behavior: "smooth" });
+		// если прокрутка уже на цели, события не будет: сторож снимет цель сам
+		clearTimeout(idleTimer);
+		idleTimer = setTimeout(() => onIdle(), IDLE_MS);
 	}
 
 	/** Колесо мыши: одна засечка — одна строка. Считается от цели идущей прокрутки, чтобы N засечек давали N строк. */
 	function wheelLine(dir: 1 | -1): void {
 		if (disposed || viewer.isOpen() || loaded.length === 0) return;
 		stack = [];
-		fill(progTarget ?? win.scrollTop);
+		fill(progTarget ?? win.scrollTop, progTarget === null);
 		const base = progTarget ?? win.scrollTop;
 		const ix = index();
 		let t = dir === 1 ? nextLineTop(ix.tops, base) : prevLineTop(ix.tops, base);
@@ -493,12 +523,19 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		scrollToTarget(t);
 	}
 
-	function onIdle(): void {
+	/** force — сторож сработал второй раз: цель, до которой прокрутка так и не доехала, больше не ждём. */
+	function onIdle(force = false): void {
 		if (disposed) return;
-		progTarget = null;
+		// плавная прокрутка WebKit может молчать дольше паузы: пока она не доехала, цель не сбрасываем и куски не убираем
+		if (!force && progTarget !== null && Math.abs(win.scrollTop - progTarget) >= 1) {
+			clearTimeout(idleTimer);
+			idleTimer = setTimeout(() => onIdle(true), GUARD_MS);
+			return;
+		}
+		setProg(null);
 		settledTop = win.scrollTop;
 		if (loaded.length === 0) return;
-		trim();
+		trim(win.scrollTop);
 		// после уборки места не дописываем: прокрутка стоит, а поправка от убранного куска не повод
 		fillTop = win.scrollTop;
 		updatePlace();
@@ -512,12 +549,12 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 				// прокрутка не наша (палец, колесо, клавиши браузера): прежние экраны уже не те
 				if (Math.abs(win.scrollTop - settledTop) > 1) stack = [];
 			} else if (Math.abs(win.scrollTop - progTarget) < 1) {
-				progTarget = null;
+				setProg(null);
 				settledTop = win.scrollTop;
 			}
 			schedulePlace();
 			clearTimeout(idleTimer);
-			idleTimer = setTimeout(onIdle, IDLE_MS);
+			idleTimer = setTimeout(() => onIdle(), IDLE_MS);
 		},
 		{ passive: true },
 	);
@@ -591,7 +628,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			const dy = e.touches[0].clientY - ty;
 			// палец ведёт текст вверх-вниз: свои экраны больше не годятся
 			if (Math.abs(dy) > 6 && Math.abs(dy) > Math.abs(dx)) {
-				progTarget = null;
+				setProg(null);
 				stack = [];
 			}
 		},

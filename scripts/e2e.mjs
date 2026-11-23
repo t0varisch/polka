@@ -1142,13 +1142,15 @@ async function markFlow(W, H, tag) {
 
 // ---- Лента (раскладка «Страниц» для пальца)
 const rbScroll = (p) => p.evaluate(() => document.querySelector(".rb-window").scrollTop);
-// Ждёт, пока прокрутка ленты постоит на месте 200 мс: плавная прокрутка — не CSS-анимация, settle её не видит
+// Ждёт, пока лента сама доложит, что своей плавной прокрутки нет (data-settled="1" на окне), и прокрутка постоит на месте 200 мс:
+// плавная прокрутка — не CSS-анимация, settle её не видит, а одной неподвижности мало: WebKit мог ещё не начать
 async function rbSettle(p) {
 	let last = -1e9;
 	let still = 0;
-	for (let i = 0; i < 120 && still < 4; i++) {
+	for (let i = 0; i < 160 && still < 4; i++) {
 		const t = await rbScroll(p);
-		still = Math.abs(t - last) < 0.5 ? still + 1 : 0;
+		const settled = await p.evaluate(() => document.querySelector(".rb-window").dataset.settled === "1");
+		still = settled && Math.abs(t - last) < 0.5 ? still + 1 : 0;
 		last = t;
 		await p.waitForTimeout(50);
 	}
@@ -1394,6 +1396,19 @@ async function ribbonFlow(W, H, tag) {
 		}
 		const end = await rbMetrics(page);
 		step(end.top?.chunk === chunk0 && end.sections <= Math.max(3, await visibleSections(page)), `${tag} лента: 15 касаний назад вернули в тот же кусок`, `кусок ${end.top?.chunk} ждали ${chunk0}, секций ${end.sections}, верх ${back.join(" ")}`);
+
+		// зажатый пробел: 40 нажатий подряд без ожидания; после остановки куски не копятся, место — верхнее слово
+		const holdNum0 = await rbNum(page);
+		const holdMax = [];
+		for (let i = 0; i < 40; i++) {
+			await page.keyboard.press("Space");
+			if (i % 8 === 7) holdMax.push((await rbMetrics(page)).sections);
+		}
+		await rbSettle(page);
+		const hm = await rbMetrics(page);
+		const hv = await visibleSections(page);
+		step(hm.sections <= Math.max(3, hv), `${tag} лента: зажатый пробел (40 нажатий) — после паузы не больше 3 кусков`, `секций ${hm.sections}, на экране ${hv}, по ходу ${holdMax.join(" ")}`);
+		step(hm.top?.word === (await dw(page)) && (await rbWordOnTop(page, hm.top.word)) && (await rbNum(page)) > holdNum0, `${tag} лента: зажатый пробел — место верхнее слово, страница выросла`, `${holdNum0} -> ${await rbNum(page)}`);
 
 		// поиск фразы на ~60% книги: слово совпадения — в верхней строке
 		const pick = await pickPhrase(page, 0.6);
