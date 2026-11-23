@@ -4,6 +4,7 @@ import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
 import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "../../core/figures";
 import { estimateChunkPages, PageNumbers, paraLines } from "../../core/pagecount";
+import { swipeDecision } from "../../core/swipe";
 import type { FontKind, Settings } from "../../settings";
 import { formatDuration, h, iconButton } from "../dom";
 import { FONT_OPTIONS, range, segmented, toggle } from "../settings-sheet";
@@ -71,6 +72,8 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	let pageW = 0;
 	let chunkIdx = -1;
 	let page = 0;
+	/** Сдвиг колонок, куда они едут (или стоят). */
+	let curX = 0;
 	let spans: HTMLElement[] = [];
 	/** Первое слово каждой страницы открытого куска (абсолютный номер). */
 	let firstOf: number[] = [];
@@ -376,9 +379,33 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		return res;
 	}
 
-	function showPage(k: number): void {
+	/** «Уменьшить движение»: без анимации и без ведения пальцем. */
+	function reducedMotion(): boolean {
+		return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+	}
+
+	/** Ставит сдвиг колонок: с анимацией (transition из CSS) или сразу. */
+	function setX(x: number, animate: boolean): void {
+		curX = x;
+		const st = content.style;
+		if (animate && !reducedMotion()) {
+			st.transition = "";
+		} else {
+			st.transition = "none";
+			st.transform = `translateX(${x}px)`;
+			void content.offsetWidth; // применить без перехода
+			st.transition = "";
+			return;
+		}
+		st.transform = `translateX(${x}px)`;
+	}
+
+	/** Открывает страницу; slide — съехать с текущего места, enter — кусок въезжает с края (1 справа, -1 слева). */
+	function showPage(k: number, slide = false, enter: 0 | 1 | -1 = 0): void {
 		page = Math.max(0, Math.min(k, firstOf.length - 1));
-		content.style.transform = `translateX(${-page * pageW}px)`;
+		const x = -page * pageW;
+		if (enter && slide) setX(x + enter * pageW, false);
+		setX(x, slide);
 		updateFoot();
 	}
 
@@ -445,20 +472,26 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		}
 	}
 
+	/** Есть ли куда листать в эту сторону. */
+	function canTurn(dir: 1 | -1): boolean {
+		if (chunkIdx < 0) return false;
+		return dir === 1 ? page < firstOf.length - 1 || chunkIdx < chunks.length - 1 : page > 0 || chunkIdx > 0;
+	}
+
 	function turn(dir: 1 | -1): void {
 		if (disposed || chunkIdx < 0 || viewer) return;
 		if (dir === 1) {
-			if (page < firstOf.length - 1) showPage(page + 1);
+			if (page < firstOf.length - 1) showPage(page + 1, true);
 			else if (chunkIdx < chunks.length - 1) {
 				renderChunk(chunkIdx + 1);
 				measure();
-				showPage(0);
+				showPage(0, true, 1);
 			} else return;
-		} else if (page > 0) showPage(page - 1);
+		} else if (page > 0) showPage(page - 1, true);
 		else if (chunkIdx > 0) {
 			renderChunk(chunkIdx - 1);
 			measure();
-			showPage(firstOf.length - 1);
+			showPage(firstOf.length - 1, true, -1);
 		} else return;
 		anchor = firstOf[page];
 		figAnchor = wordless[page] ? (pageFirstImg[page] ?? -1) : -1;
@@ -540,13 +573,61 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	let multi = false;
 	let tx = 0;
 	let ty = 0;
+	let tStart = 0;
+	/** Палец ведёт страницу: колонки идут за ним без анимации. */
+	let dragging = false;
+	let dragBase = 0;
+	const hasSelection = (): boolean => {
+		const sel = window.getSelection();
+		return !!sel && !sel.isCollapsed;
+	};
+	/** Где колонки сейчас на экране (в разгар анимации — не там, куда едут). */
+	function visualX(): number {
+		try {
+			const m = new DOMMatrix(getComputedStyle(content).transform);
+			return Number.isFinite(m.m41) ? m.m41 : curX;
+		} catch {
+			return curX;
+		}
+	}
+	/** Палец отпущен или отменён: страница доезжает или возвращается; место — по логической странице. */
+	function endDrag(dx: number, ms: number, cancel: boolean): void {
+		dragging = false;
+		swipedAt = performance.now();
+		const dir = cancel || hasSelection() ? 0 : swipeDecision(dx, ms, pageW, SWIPE_PX);
+		content.style.transition = "";
+		if (dir !== 0) turn(dir);
+		// не долистали (порог, край книги, просмотр рисунка): вернуть на место
+		setX(curX, true);
+	}
 	viewport.addEventListener(
 		"touchstart",
 		(e) => {
-			if (e.touches.length > 1) multi = true;
-			else multi = false;
+			multi = e.touches.length > 1;
 			tx = e.touches[0].clientX;
 			ty = e.touches[0].clientY;
+			tStart = performance.now();
+			// второй палец или новое касание посреди ведения — отпускаем страницу
+			if (dragging) endDrag(0, 1, true);
+		},
+		{ passive: true },
+	);
+	viewport.addEventListener(
+		"touchmove",
+		(e) => {
+			if (multi || viewer || chunkIdx < 0 || reducedMotion() || e.touches.length !== 1) return;
+			const dx = e.touches[0].clientX - tx;
+			const dy = e.touches[0].clientY - ty;
+			if (!dragging) {
+				// ведём только явно горизонтальное движение; выделение текста не трогаем
+				if (Math.abs(dx) <= 8 || Math.abs(dx) <= Math.abs(dy) || hasSelection()) return;
+				dragging = true;
+				dragBase = visualX();
+				content.style.transition = "none";
+			}
+			// у края книги — с сопротивлением: втрое меньше пальца
+			const x = dragBase + (canTurn(dx < 0 ? 1 : -1) ? dx : dx / 3);
+			content.style.transform = `translateX(${x}px)`;
 		},
 		{ passive: true },
 	);
@@ -555,15 +636,25 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		(e) => {
 			if (multi) {
 				if (e.touches.length === 0) multi = false;
+				if (dragging) endDrag(0, 1, true);
 				return;
 			}
 			const t = e.changedTouches[0];
 			const dx = t.clientX - tx;
 			const dy = t.clientY - ty;
+			if (dragging) return endDrag(dx, performance.now() - tStart, false);
 			if (Math.abs(dx) >= SWIPE_PX && Math.abs(dx) > Math.abs(dy)) {
 				swipedAt = performance.now();
-				turn(dx < 0 ? 1 : -1);
+				if (!hasSelection()) turn(dx < 0 ? 1 : -1);
 			}
+		},
+		{ passive: true },
+	);
+	viewport.addEventListener(
+		"touchcancel",
+		() => {
+			multi = false;
+			if (dragging) endDrag(0, 1, true);
 		},
 		{ passive: true },
 	);

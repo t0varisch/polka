@@ -97,6 +97,8 @@ const figInfo = (p) =>
 		}
 		return null;
 	});
+// Ждёт конца анимации листания: промеры после клавиши иначе попадают в середину съезда
+const settle = (p) => p.waitForFunction(() => document.querySelector(".pg-content")?.getAnimations().length === 0, null, { timeout: 5000 }).catch(() => {});
 const hscroll = (p) => p.evaluate(() => document.documentElement.scrollWidth > innerWidth);
 
 async function toMode(page, m, ready) {
@@ -254,6 +256,7 @@ async function findFigPage(page) {
 		const w = await dw(page);
 		await page.keyboard.press("ArrowRight");
 		await page.waitForTimeout(60);
+		await settle(page);
 		const w2 = await dw(page);
 		stuck = w2 === w && !(await figInfo(page)) ? stuck + 1 : 0;
 		if (stuck >= 3) break;
@@ -277,6 +280,7 @@ async function findImageOnlyPage(page) {
 		const w = await dw(page);
 		await page.keyboard.press("ArrowRight");
 		await page.waitForTimeout(60);
+		await settle(page);
 		stuck = (await dw(page)) === w && !(await figInfo(page)) ? stuck + 1 : 0;
 		if (stuck >= 3) break;
 	}
@@ -738,6 +742,200 @@ async function ticksFlow(W, H, tag) {
 	await ctx.close();
 }
 
+// Анимация листания: съезд, быстрые касания подряд, ведение пальцем, граница куска, «уменьшить движение»
+async function animFlow(W, H, tag) {
+	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const page = await ctx.newPage();
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
+	const num = () =>
+		page.evaluate(() => {
+			const m = /стр\. (\d+) из (\d+)/.exec(document.querySelector(".pg-foot")?.textContent ?? "");
+			return m ? Number(m[1]) : null;
+		});
+	const tx = (p = page) =>
+		p.evaluate(() => {
+			const m = /matrix\(([^)]+)\)/.exec(getComputedStyle(document.querySelector(".pg-content")).transform);
+			return m ? Number(m[1].split(",")[4]) : 0;
+		});
+	const chunkKey = () => page.evaluate(() => document.querySelector(".pg-content span[data-w]")?.getAttribute("data-w") ?? "");
+	// Слово-место стоит первым в левой колонке: левый край слова у края текста страницы
+	const wordAtLeft = () =>
+		page.evaluate(() => {
+			const w = document.querySelector("div.book").dataset.word;
+			const sp = document.querySelector(`.pg-content span[data-w="${w}"]`);
+			const box = document.querySelector(".pg-page").getBoundingClientRect();
+			if (!sp) return false;
+			const r = sp.getBoundingClientRect();
+			return r.left >= box.left && r.left < box.left + 120;
+		});
+	const seekSlider = async (v) => {
+		await page.click('[aria-label="Оглавление и закладки"]');
+		await page.waitForSelector('.sheet-backdrop input[aria-label="Позиция в книге"]');
+		await page.evaluate((v) => {
+			const el = document.querySelector('.sheet-backdrop input[aria-label="Позиция в книге"]');
+			el.value = String(v);
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			el.dispatchEvent(new Event("change", { bubbles: true }));
+		}, v);
+		await page.waitForTimeout(300);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(600);
+	};
+	const cdp = BROWSER === "chromium" ? await ctx.newCDPSession(page) : null;
+	// Палец: от середины на dx пикселей за steps шагов, потом выдержка; отпускание — lift()
+	const swipe = async (dx, { steps = 6, stepMs = 16, hold = 0, y = Math.round(H / 2), from = Math.round(W / 2) } = {}) => {
+		await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y }] });
+		for (let i = 1; i <= steps; i++) {
+			await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: from + Math.round((dx * i) / steps), y }] });
+			await page.waitForTimeout(stepMs);
+		}
+		if (hold) await page.waitForTimeout(hold);
+	};
+	const lift = () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(page, "pages", ".pg-content span[data-w]");
+		await seekSlider(300);
+		const pw = await page.evaluate(() => document.querySelector(".pg-page").getBoundingClientRect().width);
+
+		// касание правой части: через 60 мс промежуточный сдвиг, через 400 мс — новый, место = первое слово страницы
+		const x0 = await tx();
+		const n0 = await num();
+		const w0 = await dw(page);
+		await page.mouse.click(Math.round(W * 0.8), Math.round(H / 2));
+		await page.waitForTimeout(60);
+		const xm = await tx();
+		// WebKit в headless рисует первый кадр съезда позже 60 мс: там достаточно идущей анимации
+		const running = await page.evaluate(() => document.querySelector(".pg-content").getAnimations().length > 0);
+		await page.waitForTimeout(40);
+		await page.screenshot({ path: `${OUT}/${tag}-anim-mid.png` });
+		await page.waitForTimeout(300);
+		const x1 = await tx();
+		step(((xm < x0 - 1 && xm > x1 + 1) || (BROWSER === "webkit" && running)) && Math.abs(x1 - (x0 - pw)) < 1.5, `${tag} анимация: касание — промежуточный сдвиг, потом новый`, `${x0} -> ${xm} -> ${x1}`);
+		step((await dw(page)) > w0 && (await wordAtLeft()) && (await num()) === n0 + 1, `${tag} анимация: место — первое слово новой страницы`, `слово ${w0} -> ${await dw(page)}`);
+
+		// три касания с промежутком 50 мс
+		const n1 = await num();
+		for (let i = 0; i < 3; i++) {
+			await page.mouse.click(Math.round(W * 0.8), Math.round(H / 2));
+			await page.waitForTimeout(50);
+		}
+		await page.waitForTimeout(500);
+		step((await num()) === n1 + 3 && (await wordAtLeft()) && (await onOpenPage(page)), `${tag} анимация: три касания подряд — на 3 страницы дальше, место верное`, `${n1} -> ${await num()}`);
+		// клавиши подряд
+		const n2 = await num();
+		for (let i = 0; i < 3; i++) {
+			await page.keyboard.press("ArrowLeft");
+			await page.waitForTimeout(30);
+		}
+		await page.waitForTimeout(500);
+		step((await num()) === n2 - 3 && (await wordAtLeft()), `${tag} анимация: три клавиши назад подряд`, `${n2} -> ${await num()}`);
+
+		if (cdp) {
+			// ведение пальцем: страница идёт за пальцем без анимации
+			const n3 = await num();
+			const xa = await tx();
+			await swipe(-30, { steps: 5, stepMs: 20, hold: 250 });
+			const xd = await tx();
+			step(Math.abs(xd - (xa - 30)) < 3, `${tag} свайп: страница идёт за пальцем`, `${xa} -> ${xd}`);
+			await lift();
+			await page.waitForTimeout(500);
+			step((await num()) === n3 && Math.abs((await tx()) - xa) < 1, `${tag} свайп: 30 px медленно — страница та же, вернулась`, `${n3} -> ${await num()}`);
+			await page.waitForTimeout(450);
+			await swipe(-120, { steps: 6, stepMs: 25 });
+			await lift();
+			await page.waitForTimeout(600);
+			step((await num()) === n3 + 1 && (await wordAtLeft()), `${tag} свайп: 120 px — следующая страница`, `${n3} -> ${await num()}`);
+			await page.waitForTimeout(450);
+			await swipe(120, { steps: 6, stepMs: 25 });
+			await lift();
+			await page.waitForTimeout(600);
+			step((await num()) === n3, `${tag} свайп: вправо 120 px — назад`, `-> ${await num()}`);
+			await page.waitForTimeout(450);
+			// рывок
+			await swipe(-38, { steps: 1, stepMs: 0 });
+			await lift();
+			await page.waitForTimeout(600);
+			step((await num()) === n3 + 1, `${tag} свайп: быстрый рывок на 38 px — листает`, `-> ${await num()}`);
+		}
+
+		// граница куска: последняя страница главы, свайп вперёд — следующая глава, номер +1
+		const k0 = await chunkKey();
+		let found = false;
+		for (let i = 0; i < 600 && !found; i++) {
+			await page.keyboard.press("ArrowRight");
+			await page.waitForTimeout(40);
+			if ((await chunkKey()) !== k0) found = true;
+		}
+		await page.waitForTimeout(400);
+		if (!step(found, `${tag} анимация: найдена граница куска`)) throw new Error("нет границы куска");
+		await page.keyboard.press("ArrowLeft");
+		await page.waitForTimeout(500);
+		const nb = await num();
+		const kb = await chunkKey();
+		if (cdp) {
+			await swipe(-120, { steps: 6, stepMs: 25 });
+			await lift();
+			await page.waitForTimeout(700);
+			step((await chunkKey()) !== kb && (await num()) === nb + 1 && (await wordAtLeft()) && (await onOpenPage(page)), `${tag} свайп: через границу куска — следующая глава, номер +1`, `${nb} -> ${await num()}`);
+			await page.waitForTimeout(450);
+			await swipe(120, { steps: 6, stepMs: 25 });
+			await lift();
+			await page.waitForTimeout(700);
+			step((await chunkKey()) === kb && (await num()) === nb && (await onOpenPage(page)), `${tag} свайп: обратно в прежнюю главу, номер -1`, `-> ${await num()}`);
+		}
+		// клавиша через границу: новый кусок въезжает справа
+		await page.keyboard.press("ArrowRight");
+		await page.waitForTimeout(60);
+		const xe = await tx();
+		await page.waitForTimeout(500);
+		const xf = await tx();
+		step((await chunkKey()) !== kb && (await num()) === nb + 1 && xe > xf + 1, `${tag} анимация: новый кусок въезжает справа`, `${xe} -> ${xf}`);
+		await page.screenshot({ path: `${OUT}/${tag}-anim-end.png` });
+		step(!(await hscroll(page)), `${tag} анимация: нет горизонтальной прокрутки`);
+	} catch (e) {
+		step(false, `${tag} анимация: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-anim-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+
+	// «уменьшить движение»: без перехода, листание мгновенное, свайп листает как раньше
+	const ctx2 = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true, reducedMotion: "reduce" });
+	const p2 = await ctx2.newPage();
+	try {
+		await p2.goto(base);
+		await p2.waitForSelector(".library .actions");
+		await p2.setInputFiles('input[type="file"]', BOOK);
+		await p2.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(p2, "pages", ".pg-content span[data-w]");
+		const dur = await p2.evaluate(() => getComputedStyle(document.querySelector(".pg-content")).transitionDuration);
+		step(/^0s(, 0s)*$/.test(dur), `${tag} reduced-motion: transition-duration 0`, dur);
+		const xa = await tx(p2);
+		await p2.keyboard.press("ArrowRight");
+		await p2.waitForTimeout(20);
+		const xb = await tx(p2);
+		step(Math.abs(xb - xa) > 1, `${tag} reduced-motion: листание мгновенное`, `${xa} -> ${xb}`);
+		if (BROWSER === "chromium") {
+			const c2 = await ctx2.newCDPSession(p2);
+			const n = async () => p2.evaluate(() => Number(/стр\. (\d+)/.exec(document.querySelector(".pg-foot")?.textContent ?? "")?.[1]));
+			const n0 = await n();
+			const y = Math.round(H / 2);
+			await c2.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: Math.round(W / 2), y }] });
+			await c2.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: Math.round(W / 2) - 80, y }] });
+			const xm = await tx(p2);
+			await c2.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+			await p2.waitForTimeout(100);
+			step((await n()) === n0 + 1 && Math.abs(xm - (await tx(p2))) > 1, `${tag} reduced-motion: свайп листает без ведения пальцем`, `${n0} -> ${await n()}`);
+		}
+	} catch (e) {
+		step(false, `${tag} reduced-motion: сценарий оборвался`, String(e.message).split("\n")[0]);
+	}
+	await ctx2.close();
+}
+
 console.log(`# ${BROWSER}, книга ${basename(BOOK)}, ${base}, снимки в ${OUT}`);
 for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
@@ -746,6 +944,7 @@ for (const [W, H] of SIZES) {
 	if (!IMG) await searchFlow(W, H, tag);
 	await pageNumberFlow(W, H, tag);
 	await ticksFlow(W, H, tag);
+	if (!IMG) await animFlow(W, H, tag);
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }
