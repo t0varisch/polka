@@ -4,7 +4,7 @@
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
 import { PageNumbers } from "../../core/pagecount";
-import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop, screenGrid, screenIndex } from "../../core/ribbon";
+import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop, chainStart, locateCell, screenGrid } from "../../core/ribbon";
 import { swipeDecision } from "../../core/swipe";
 import type { FontKind, Settings } from "../../settings";
 import { h } from "../dom";
@@ -61,8 +61,10 @@ interface Loaded {
 	spans: HTMLElement[];
 	figs: Fig[];
 	lines: Line[];
-	/** Верхи экранов куска от его верха: страницы куска, длина сетки — их число. */
+	/** Верхи экранов куска от его верха: страницы куска, длина сетки — их число (у куска, целиком лежащего в последнем экране предыдущего, 0). */
 	grid: number[];
+	/** Нижний край последнего экрана цепочки от верха куска: у куска со страницами — верх последней ячейки плюс окно, у куска без них — край предыдущего. */
+	edge: number;
 	top: number;
 	height: number;
 }
@@ -130,6 +132,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	let lastScrollAt = -1e9;
 	let swipedAt = -1e9;
 
+	/** Начала сеток кусков и края цепочки (от верха куска), раз вычисленные: переживают уборку куска из DOM; сбрасываются вместе с раскладкой. */
+	const chainMemo = new Map<number, { start: number | null; edge: number }>();
 	let loaded: Loaded[] = [];
 	let flat: Flat | null = null;
 	let pageNums = new PageNumbers(chunks.map(() => 1));
@@ -197,16 +201,43 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			else next = lines[k].word;
 		}
 		l.lines = lines;
-		regrid(l);
 	}
 
-	/** Сетка экранов куска по его строкам и высоте окна. */
-	function regrid(l: Loaded): void {
-		l.grid = screenGrid(
-			l.lines.map((x) => x.top),
-			l.lines.map((x) => x.bottom),
-			H,
-		);
+	/**
+	 * Сетки экранов кусков с loaded[k] и дальше цепочкой: сетка куска начинается там, куда ляжет экран после последней ячейки
+	 * предыдущего куска (если тот в DOM рядом), иначе с 0. Кусок целиком в последнем экране предыдущего — без страниц, край идёт дальше.
+	 * Начала хранятся в сетках: убранный сосед их не меняет. Число страниц куска — длина его сетки.
+	 */
+	function chainFrom(k: number): void {
+		index();
+		for (let j = k; j < loaded.length; j++) {
+			const l = loaded[j];
+			const prev = j > 0 ? loaded[j - 1] : undefined;
+			const tops = l.lines.map((x) => x.top);
+			const bottoms = l.lines.map((x) => x.bottom);
+			let start: number | null = 0;
+			let carried = 0;
+			if (prev && prev.i === l.i - 1) {
+				carried = prev.top + prev.edge - l.top;
+				start = chainStart(tops, bottoms, carried - H, H);
+			} else {
+				// предыдущего куска в DOM нет: берём начало, что было вычислено, пока он был, иначе 0
+				const m = chainMemo.get(l.i);
+				if (m) {
+					start = m.start;
+					carried = m.edge;
+				}
+			}
+			if (start === null) {
+				l.grid = [];
+				l.edge = carried;
+			} else {
+				l.grid = screenGrid(tops, bottoms, H, start);
+				l.edge = l.grid[l.grid.length - 1] + H;
+			}
+			chainMemo.set(l.i, { start, edge: l.edge });
+			pageNums.setMeasured(l.i, l.grid.length);
+		}
 	}
 
 	/** Индекс строк всех кусков; пересчитывается после любых изменений DOM. */
@@ -257,12 +288,12 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		else content.prepend(section);
 		const r = pc.renderChunk(i, section, geo());
 		paintMarks(section, r.spans, c.fromWord, c.toWord, host.bookmarks());
-		const l: Loaded = { i, section, spans: r.spans, figs: r.figs, lines: [], grid: [0], top: 0, height: 0 };
+		const l: Loaded = { i, section, spans: r.spans, figs: r.figs, lines: [], grid: [0], edge: 0, top: 0, height: 0 };
 		if (at === "end") loaded.push(l);
 		else loaded.unshift(l);
 		flat = null;
 		measureLines(l);
-		pageNums.setMeasured(i, l.grid.length);
+		chainFrom(at === "end" ? loaded.length - 1 : 0);
 		if (!ref) return 0;
 		const delta = ref.getBoundingClientRect().top - before;
 		if (delta !== 0) {
@@ -303,9 +334,10 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	 * Дописывает куски, чтобы вокруг экрана с верхом pos было не меньше полутора экранов текста.
 	 * prepend=false — сверху не добавлять (идёт плавная прокрутка, поправка scrollTop её сорвала бы).
 	 * Лишние куски (больше трёх), далёкие и от экрана с верхом pos, и от видимого, тут же убираются: зажатая клавиша листания иначе копила бы их.
+	 * doTrim=false — куски не убирать: во время плавной прокрутки убранный сверху кусок сдвигает прокрутку и цель, и цепочка коротких кусков уносит её далеко от цели; уберёт onIdle.
 	 * Возвращает, на сколько сдвинулось содержимое из-за добавленного сверху и убранного: pos и верха экранов надо сдвинуть так же.
 	 */
-	function fill(pos: number, prepend = true): number {
+	function fill(pos: number, prepend = true, doTrim = true): number {
 		if (loaded.length === 0) return 0;
 		const margin = MARGIN_SCREENS * H;
 		let shifted = 0;
@@ -315,6 +347,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			pos += d;
 			shifted += d;
 		}
+		if (!doTrim) return shifted;
 		const d = trim(pos, margin);
 		// убран верхний кусок: поправка scrollTop оборвала нашу плавную прокрутку, запускаем заново к сдвинутой цели
 		if (d !== 0 && progTarget !== null) win.scrollTo({ top: progTarget, behavior: "smooth" });
@@ -353,19 +386,20 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	// ---- место, подвал
 
 	/**
-	 * Номер страницы: страницы кусков до открытого плюс ячейка сетки экранов куска, в которой стоит прокрутка.
-	 * Последний экран книги (прокрутка в максимуме, последний кусок в DOM) — M из M.
+	 * Номер страницы: страницы кусков до ячейки, в которой стоит прокрутка, плюс её номер в цепочке сеток кусков в DOM.
+	 * Прокрутка выше начала сетки куска — последняя ячейка предыдущего. Последний экран книги (последний кусок в DOM, прокрутка в максимуме) — M из M.
 	 */
 	function updateFoot(): void {
-		const ci = chunkOfWord(chunks, anchor);
-		const l = loaded.find((x) => x.i === ci);
 		const all = pageNums.total;
-		let n = pageNums.startOf(ci) + 1;
-		if (l) {
-			index();
-			n += screenIndex(l.grid, win.scrollTop - l.top);
-			if (ci === chunks.length - 1 && win.scrollTop >= win.scrollHeight - win.clientHeight - 1) n = all;
-		}
+		index();
+		const at = locateCell(
+			loaded.map((l) => l.grid.map((g) => l.top + g)),
+			win.scrollTop,
+		);
+		let n = pageNums.startOf(chunkOfWord(chunks, anchor)) + 1;
+		if (at) n = pageNums.startOf(loaded[at.chunk].i) + at.cell + 1;
+		const lastIn = loaded.length > 0 && loaded[loaded.length - 1].i === chunks.length - 1;
+		if (lastIn && win.scrollTop >= win.scrollHeight - win.clientHeight - 1) n = all;
 		foot.textContent = footText(Math.max(1, Math.min(n, all)), all, anchor, total);
 	}
 
@@ -390,7 +424,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			// дописываем, когда прокрутка ушла от прежнего места хотя бы на четверть экрана: у коротких глав иначе дописывание и уборка гоняли бы друг друга
 			if (Math.abs(win.scrollTop - fillTop) >= H / 4) {
 				fillTop = win.scrollTop;
-				fill(win.scrollTop, progTarget === null);
+				fill(win.scrollTop, progTarget === null, progTarget === null);
 			}
 			updatePlace();
 		};
@@ -435,12 +469,10 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 
 	/** Страницы всех кусков заново: оценка, у кусков в DOM — точные числа. */
 	function reestimate(): void {
+		chainMemo.clear();
 		pageNums = estimateBookPages(host, chunks, tocSet, pc, geo());
 		index();
-		for (const l of loaded) {
-			regrid(l);
-			pageNums.setMeasured(l.i, l.grid.length);
-		}
+		chainFrom(0);
 	}
 
 	/** Полная раскладка: геометрия, шрифты, куски вокруг места. Место (anchor) не меняется и не сообщается. */
@@ -449,6 +481,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		const seq = ++layoutSeq;
 		if (!applyGeometry()) return;
 		clearLoaded();
+		chainMemo.clear();
 		pageNums = estimateBookPages(host, chunks, tocSet, pc, geo());
 		openAt(anchor, false);
 		// Шрифт мог ещё не загрузиться: после его прихода строки другие, меряем заново
@@ -456,6 +489,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			await document.fonts.ready;
 			if (disposed || seq !== layoutSeq) return;
 			clearLoaded();
+			chainMemo.clear();
 			pageNums = estimateBookPages(host, chunks, tocSet, pc, geo());
 			openAt(anchor, false);
 		}
@@ -515,7 +549,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/** Едет к верху t плавно (или сразу при «уменьшить движение»); куски вокруг цели дописываются до начала движения. */
 	function scrollToTarget(t: number): void {
 		// во время своей плавной прокрутки сверху не дописываем: поправка scrollTop оборвала бы её
-		t += fill(t, progTarget === null);
+		t += fill(t, progTarget === null, loaded.length > MAX_CHUNKS + 2);
 		if (reducedMotion()) {
 			setProg(null);
 			setScrollTop(t);

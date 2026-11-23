@@ -69,11 +69,11 @@ export function prevLineTop(lineTops: number[], top: number): number {
 }
 
 /**
- * Сетка экранов куска: верхи от 0, каждый следующий — nextScreenTop от прежнего, пока тот сдвигается.
+ * Сетка экранов куска: верхи от start (по умолчанию 0), каждый следующий — nextScreenTop от прежнего, пока тот сдвигается.
  * Строки и рисунки — только этого куска, в его координатах. Длина сетки — число страниц куска.
  */
-export function screenGrid(lineTops: number[], lineBottoms: number[], height: number): number[] {
-	const grid = [0];
+export function screenGrid(lineTops: number[], lineBottoms: number[], height: number, start = 0): number[] {
+	const grid = [start];
 	for (;;) {
 		const cur = grid[grid.length - 1];
 		const next = nextScreenTop(lineTops, lineBottoms, cur, height);
@@ -92,4 +92,28 @@ export function screenIndex(grid: number[], offset: number): number {
 		else hi = mid;
 	}
 	return Math.max(0, lo - 1);
+}
+
+/**
+ * Начало сетки куска, идущего за куском с последней ячейкой на верху prevCellTop (в координатах этого куска, обычно меньше 0):
+ * туда ляжет экран после последней ячейки предыдущего. null — кусок целиком в той ячейке, страниц в нём нет.
+ */
+export function chainStart(lineTops: number[], lineBottoms: number[], prevCellTop: number, height: number): number | null {
+	const t = nextScreenTop(lineTops, lineBottoms, prevCellTop, height);
+	return t > prevCellTop + EPS ? t : null;
+}
+
+/**
+ * Ячейка, в которой стоит прокрутка pos: последняя, чей верх не ниже pos (с допуском). grids — верхи ячеек кусков подряд в общих
+ * координатах. Выше самой первой ячейки — она же. Ячеек нет совсем — null.
+ */
+export function locateCell(grids: number[][], pos: number): { chunk: number; cell: number } | null {
+	let best: { chunk: number; cell: number } | null = null;
+	for (let c = 0; c < grids.length; c++) {
+		for (let k = 0; k < grids[c].length; k++) {
+			if (grids[c][k] > pos + EPS) return best ?? { chunk: c, cell: k };
+			best = { chunk: c, cell: k };
+		}
+	}
+	return best;
 }

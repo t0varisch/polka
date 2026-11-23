@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop, screenGrid, screenIndex } from "./ribbon";
+import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop, chainStart, locateCell, screenGrid, screenIndex } from "./ribbon";
 
 /** Строки по 30 px: верх 0, 30, 60…; низ 30, 60, 90… */
 const lines = (n: number) => ({
@@ -143,5 +143,60 @@ describe("screenIndex", () => {
 			const to = nextScreenTop(tops, bottoms, off, 100);
 			expect(screenIndex(g, to)).toBe(screenIndex(g, off) + 1);
 		}
+	});
+});
+
+describe("screenGrid со сдвигом начала", () => {
+	it("сетка идёт от заданного начала", () => {
+		const { tops, bottoms } = lines(20);
+		expect(screenGrid(tops, bottoms, 100, 30)).toEqual([30, 120, 210, 300, 390, 480, 570]);
+	});
+});
+
+describe("chainStart", () => {
+	// следующий кусок: строки по 30 px от его верха; последняя ячейка предыдущего начиналась на 40 px выше его верха
+	it("начало сетки — куда ляжет экран после последней ячейки предыдущего куска", () => {
+		const { tops, bottoms } = lines(20);
+		// край экрана: -40 + 100 = 60 от верха куска; первая строка с низом ниже 60 — третья (верх 60)
+		expect(chainStart(tops, bottoms, -40, 100)).toBe(60);
+	});
+
+	it("кусок целиком влезает в последний экран предыдущего — null (0 страниц)", () => {
+		const { tops, bottoms } = lines(2);
+		expect(chainStart(tops, bottoms, -40, 100)).toBeNull();
+	});
+
+	it("цепочка через кусок из 0 страниц: тот же край продолжается дальше", () => {
+		// A: последняя ячейка на -40 от верха B; B из двух строк (60 px) целиком в ней; C стоит на 60 px ниже верха B
+		const b = lines(2);
+		expect(chainStart(b.tops, b.bottoms, -40, 100)).toBeNull();
+		const c = lines(10);
+		expect(chainStart(c.tops, c.bottoms, -40 - 60, 100)).toBe(0);
+	});
+});
+
+describe("locateCell", () => {
+	it("последняя ячейка, чей верх не ниже прокрутки", () => {
+		const grids = [[0, 90, 180], [250, 340]];
+		expect(locateCell(grids, 0)).toEqual({ chunk: 0, cell: 0 });
+		expect(locateCell(grids, 200)).toEqual({ chunk: 0, cell: 2 });
+		expect(locateCell(grids, 250)).toEqual({ chunk: 1, cell: 0 });
+		expect(locateCell(grids, 900)).toEqual({ chunk: 1, cell: 1 });
+	});
+
+	it("прокрутка выше начала сетки куска B — последняя ячейка куска A", () => {
+		const grids = [[0, 90, 180], [250, 340]];
+		expect(locateCell(grids, 220)).toEqual({ chunk: 0, cell: 2 });
+	});
+
+	it("кусок без страниц пропускается", () => {
+		const grids = [[0, 90], [], [200]];
+		expect(locateCell(grids, 150)).toEqual({ chunk: 0, cell: 1 });
+		expect(locateCell(grids, 210)).toEqual({ chunk: 2, cell: 0 });
+	});
+
+	it("выше самой первой ячейки — первая ячейка; ячеек нет совсем — null", () => {
+		expect(locateCell([[40, 130]], 0)).toEqual({ chunk: 0, cell: 0 });
+		expect(locateCell([[], []], 10)).toBeNull();
 	});
 });

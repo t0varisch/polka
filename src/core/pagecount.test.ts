@@ -41,3 +41,12 @@ describe("PageNumbers", () => {
 		expect(n.total).toBe(14);
 	});
 });
+
+describe("PageNumbers: кусок без страниц", () => {
+	it("0 страниц допустимы и не сдвигают номера", () => {
+		const p = new PageNumbers([3, 3, 3]);
+		p.setMeasured(1, 0);
+		expect(p.startOf(2)).toBe(3);
+		expect(p.total).toBe(6);
+	});
+});

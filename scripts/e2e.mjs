@@ -1076,9 +1076,10 @@ async function markFlow(W, H, tag) {
 			sel.addRange(r);
 		});
 		const nA = await nowNum();
+		const sA = await rbScroll(page);
 		await clickRight();
 		await settle(page);
-		step((await nowNum()) === nA + 1, `${tag} выделение вне книги: касание листает`, `${nA} -> ${await nowNum()}`);
+		step((await nowNum()) === nA + 1, `${tag} выделение вне книги: касание листает`, `${nA} -> ${await nowNum()}, прокрутка ${sA} -> ${await rbScroll(page)}`);
 		await page.evaluate(() => getSelection().removeAllRanges());
 		const wIn = await dw(page);
 		await select(wIn, wIn);
