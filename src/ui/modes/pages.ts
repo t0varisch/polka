@@ -2,46 +2,41 @@
 // Место в книге — первое слово открытой страницы.
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
-import { fitSize } from "../../core/figures";
-import { estimateChunkPages, PageNumbers, paraLines } from "../../core/pagecount";
+import { PageNumbers } from "../../core/pagecount";
+import { resolveFlow } from "../../core/ribbon";
 import { swipeDecision } from "../../core/swipe";
 import type { FontKind, Settings } from "../../settings";
-import { formatDuration, h } from "../dom";
+import { h } from "../dom";
 import { FONT_OPTIONS, range, segmented, toggle } from "../settings-sheet";
-import { createPagesContent, createSelection, paintMarks, type Fig, type FigGeometry } from "./pages-content";
+import {
+	createPagesContent,
+	createSelection,
+	detectLang,
+	estimateBookPages,
+	flowRow,
+	FONT_FAMILY,
+	footText,
+	HERE_MS,
+	isCoarsePointer,
+	MAX_PAGE_W,
+	pageMargin,
+	paintMarks,
+	reducedMotion,
+	type Fig,
+	type FigGeometry,
+} from "./pages-content";
 import { createFigureViewer } from "./pages-viewer";
+import { ribbonMode } from "./ribbon";
 import type { ModeFactory, ModeHost, ModeView } from "./types";
 
-/** Скорость для оценки «осталось». */
-const READ_WPM = 230;
-/** Ширина страницы на широком экране. */
-const MAX_PAGE_W = 760;
 const WHEEL_GAP_MS = 250;
 const SWIPE_PX = 40;
-const HERE_MS = 1500;
 
-const FONT_FAMILY: Record<FontKind, string> = {
-	serif: '"Literata", Georgia, "Times New Roman", serif',
-	sans: 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-	mono: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
-};
+/** «Страницы»: раскладка по настройке — колонками или лентой (авто: на телефоне лента). */
+export const pagesMode: ModeFactory = (host, startWord) =>
+	resolveFlow(host.settings.pageFlow, isCoarsePointer()) === "ribbon" ? ribbonMode(host, startWord) : columnsMode(host, startWord);
 
-/** Язык для переносов: ru, если среди первых 2000 букв больше кириллицы. */
-function detectLang(paragraphs: string[]): "ru" | "en" {
-	let letters = 0;
-	let cyr = 0;
-	for (const p of paragraphs) {
-		for (const ch of p) {
-			if (!/\p{L}/u.test(ch)) continue;
-			letters++;
-			if (/[Ѐ-ӿ]/.test(ch)) cyr++;
-			if (letters >= 2000) return cyr * 2 > letters ? "ru" : "en";
-		}
-	}
-	return cyr * 2 > letters ? "ru" : "en";
-}
-
-export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number): Promise<ModeView> => {
+const columnsMode: ModeFactory = async (host: ModeHost, startWord: number): Promise<ModeView> => {
 	const s: Settings = host.settings;
 	const { stream } = host;
 	const total = stream.words.length;
@@ -50,7 +45,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	const chunks: Chunk[] = buildChunks(stream, host.book.paragraphs.length, tocParas);
 	const lang = detectLang(host.book.paragraphs);
 	const pc = createPagesContent({ host, chunks, tocSet, onRelayout: () => scheduleRelayout() });
-	const { images, imgOfChunk, chunkOfImg, dims, shown } = pc;
+	const { chunkOfImg, shown } = pc;
 
 	const content = h("div.pg-content", { lang });
 	const pageBox = h("div.pg-page", {}, content);
@@ -96,10 +91,6 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		return anchor;
 	}
 
-	function margin(width: number): number {
-		return width < 600 ? 20 : 48;
-	}
-
 	/** Выставляет размеры колонок под окно; false — окно ещё без размера. */
 	function applyGeometry(): boolean {
 		const w = viewport.clientWidth;
@@ -112,7 +103,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		const lines = Math.max(1, Math.floor((hh - 2 * padV) / lh));
 		pageW = Math.min(w, MAX_PAGE_W);
 		const off = Math.floor((w - pageW) / 2);
-		const m = margin(pageW);
+		const m = pageMargin(pageW);
 		view.style.setProperty("--pg-font", FONT_FAMILY[s.pageFont]);
 		view.style.setProperty("--pg-size", `${s.pageSize}px`);
 		// Подпись под рисунком — другого рода шрифт, чем основной текст
@@ -136,48 +127,9 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		return true;
 	}
 
-	/** Средняя ширина знака шрифта страниц; без canvas (тесты, jsdom) — 0.5 кегля. */
-	function avgCharWidth(): number {
-		const fallback = s.pageSize * 0.5;
-		try {
-			const ctx = document.createElement("canvas").getContext("2d");
-			if (!ctx || typeof ctx.measureText !== "function") return fallback;
-			let sample = "";
-			for (const p of host.book.paragraphs) {
-				sample += p + " ";
-				if (sample.length >= 3000) break;
-			}
-			if (!sample.trim()) return fallback;
-			ctx.font = `${s.pageSize}px ${FONT_FAMILY[s.pageFont]}`;
-			const w = ctx.measureText(sample).width / sample.length;
-			return w > 0 ? w : fallback;
-		} catch {
-			return fallback;
-		}
-	}
-
 	/** Оценка страниц всех кусков под текущую геометрию; точные числа сбрасываются. */
 	function estimatePages(): void {
-		const charsPerLine = Math.max(10, Math.floor(colW / avgCharWidth()));
-		const g = { charsPerLine, linesPerPage: Math.max(1, colH / lineH) };
-		pageNums = new PageNumbers(
-			chunks.map((c, i) => {
-				const paras: { chars: number; heading: boolean }[] = [];
-				for (let p = c.fromPara; p < c.toPara; p++) {
-					paras.push({ chars: host.book.paragraphs[p]?.length ?? 0, heading: tocSet.has(p) });
-				}
-				let extra = 0;
-				for (const ix of (imgOfChunk[i] ?? []).filter(shown)) {
-					const im = images[ix];
-					const d = dims[ix] as { w: number; h: number };
-					const hasCap = !!im.caption || !!im.title;
-					const maxH = hasCap ? Math.max(3 * lineH, colH - 2 * lineH) : colH;
-					extra += Math.max(1, Math.ceil(fitSize(d.w, d.h, colW, Math.min(maxH, colH)).h / lineH));
-					if (im.title) extra += paraLines(im.title.length, charsPerLine, 0);
-				}
-				return estimateChunkPages(paras, extra, g);
-			}),
-		);
+		pageNums = estimateBookPages(host, chunks, tocSet, pc, geo());
 	}
 
 	function geo(): FigGeometry {
@@ -248,11 +200,6 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		return res;
 	}
 
-	/** «Уменьшить движение»: без анимации и без ведения пальцем. */
-	function reducedMotion(): boolean {
-		return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-	}
-
 	/** Сдвиг пальца к моменту отпускания: добавляется к началу въезда нового куска. */
 	let enterShift = 0;
 
@@ -283,10 +230,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	}
 
 	function updateFoot(): void {
-		const w = word();
-		const pct = (w / Math.max(1, total - 1)) * 100;
-		const rest = formatDuration(((total - w) / READ_WPM) * 60000);
-		foot.textContent = `стр. ${pageNums.startOf(chunkIdx) + page + 1} из ${pageNums.total} · ${pct.toFixed(pct < 10 ? 1 : 0)}% · осталось ≈ ${rest}`;
+		foot.textContent = footText(pageNums.startOf(chunkIdx) + page + 1, pageNums.total, word(), total);
 	}
 
 	function flashHere(w: number): void {
@@ -578,6 +522,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 				self.applySettings();
 			};
 			return [
+				flowRow(host),
 				segmented<FontKind>("Шрифт", s.pageFont, FONT_OPTIONS, (v) => set("pageFont", v)),
 				range("Размер текста", s.pageSize, 14, 34, 1, (v) => `${v} px`, (v) => set("pageSize", v)),
 				range("Межстрочный интервал", s.lineHeight, 1.2, 2, 0.05, (v) => v.toFixed(2), (v) => set("lineHeight", v)),

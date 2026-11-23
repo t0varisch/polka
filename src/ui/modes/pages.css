@@ -156,3 +156,37 @@
 	background: rgba(0, 0, 0, 0.45);
 	border-radius: 50%;
 }
+
+/* Лента: окно обычной прокрутки, куски идут один под другим; тот же вид текста, что у колонок */
+.mode-ribbon .rb-window {
+	position: relative;
+	min-height: 0;
+	min-width: 0;
+	/* срез текста у верхнего края не прижат к шапке */
+	margin-top: 8px;
+	overflow-x: hidden;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	/* вертикаль и щипок — браузеру, горизонталь — листанию */
+	touch-action: pan-y pinch-zoom;
+	/* поправку прокрутки при добавлении куска сверху делаем сами */
+	overflow-anchor: none;
+	cursor: pointer;
+	scrollbar-width: thin;
+	-webkit-overflow-scrolling: touch;
+}
+.mode-ribbon .rb-content {
+	position: relative;
+	margin: 0 auto;
+}
+.mode-ribbon .pg-content.rb-chunk {
+	position: static;
+	transition: none;
+	will-change: auto;
+}
+.mode-ribbon .rb-chunk.first {
+	padding-top: 16px;
+}
+.mode-ribbon .rb-chunk.last {
+	padding-bottom: 48px;
+}

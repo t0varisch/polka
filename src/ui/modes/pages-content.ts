@@ -2,10 +2,103 @@
 // Им пользуются раскладка колонками (pages.ts) и лента: размеры колонки передаются при вызове.
 import type { Chunk } from "../../core/chunks";
 import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "../../core/figures";
+import { estimateChunkPages, PageNumbers, paraLines } from "../../core/pagecount";
 import { cleanQuote } from "../../core/quote";
+import { resolveFlow } from "../../core/ribbon";
+import type { FontKind } from "../../settings";
 import type { BookImage } from "../../types";
-import { h } from "../dom";
+import { formatDuration, h } from "../dom";
+import { segmented } from "../settings-sheet";
 import type { ModeHost } from "./types";
+
+/** Скорость для оценки «осталось». */
+export const READ_WPM = 230;
+/** Ширина страницы на широком экране. */
+export const MAX_PAGE_W = 760;
+/** Сколько светится слово, куда перешли, мс. */
+export const HERE_MS = 1500;
+
+export const FONT_FAMILY: Record<FontKind, string> = {
+	serif: '"Literata", Georgia, "Times New Roman", serif',
+	sans: 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+	mono: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
+};
+
+/** Поля страницы по ширине. */
+export function pageMargin(width: number): number {
+	return width < 600 ? 20 : 48;
+}
+
+/** Язык для переносов: ru, если среди первых 2000 букв больше кириллицы. */
+export function detectLang(paragraphs: string[]): "ru" | "en" {
+	let letters = 0;
+	let cyr = 0;
+	for (const p of paragraphs) {
+		for (const ch of p) {
+			if (!/\p{L}/u.test(ch)) continue;
+			letters++;
+			if (/[Ѐ-ӿ]/.test(ch)) cyr++;
+			if (letters >= 2000) return cyr * 2 > letters ? "ru" : "en";
+		}
+	}
+	return cyr * 2 > letters ? "ru" : "en";
+}
+
+/** Грубый указатель (палец): на нём «авто» выбирает ленту. */
+export function isCoarsePointer(): boolean {
+	return typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+}
+
+/** «Уменьшить движение»: без анимации. */
+export function reducedMotion(): boolean {
+	return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** Строка подвала: страница, процент, оставшееся время. */
+export function footText(pageNo: number, pageTotal: number, word: number, totalWords: number): string {
+	const pct = (word / Math.max(1, totalWords - 1)) * 100;
+	const rest = formatDuration(((totalWords - word) / READ_WPM) * 60000);
+	return `стр. ${pageNo} из ${pageTotal} · ${pct.toFixed(pct < 10 ? 1 : 0)}% · осталось ≈ ${rest}`;
+}
+
+/** Строка настроек «Листание»; смена пересоздаёт режим. Показывает то, что открыто сейчас (авто уже разрешено). */
+export function flowRow(host: ModeHost): HTMLElement {
+	const s = host.settings;
+	return segmented<"pages" | "ribbon">(
+		"Листание",
+		resolveFlow(s.pageFlow, isCoarsePointer()),
+		[
+			["pages", "Страницами"],
+			["ribbon", "Лентой"],
+		],
+		(v) => {
+			s.pageFlow = v;
+			host.saveSettings();
+			host.reopen();
+		},
+	);
+}
+
+/** Средняя ширина знака шрифта страниц; без canvas (тесты, jsdom) — 0.5 кегля. */
+function avgCharWidth(host: ModeHost): number {
+	const s = host.settings;
+	const fallback = s.pageSize * 0.5;
+	try {
+		const ctx = document.createElement("canvas").getContext("2d");
+		if (!ctx || typeof ctx.measureText !== "function") return fallback;
+		let sample = "";
+		for (const p of host.book.paragraphs) {
+			sample += p + " ";
+			if (sample.length >= 3000) break;
+		}
+		if (!sample.trim()) return fallback;
+		ctx.font = `${s.pageSize}px ${FONT_FAMILY[s.pageFont]}`;
+		const w = ctx.measureText(sample).width / sample.length;
+		return w > 0 ? w : fallback;
+	} catch {
+		return fallback;
+	}
+}
 
 /** Сколько после снятия выделения оно ещё считается выделением для закладки, мс */
 const SEL_KEEP_MS = 2000;
@@ -313,4 +406,29 @@ export function createSelection(content: HTMLElement, parts: () => SelPart[]): P
 			document.removeEventListener("selectionchange", onSelectionChange);
 		},
 	};
+}
+
+/** Оценка страниц всех кусков под геометрию: страница — colH высоты, ширина колонки colW; точные числа потом ставит раскладка. */
+export function estimateBookPages(host: ModeHost, chunks: Chunk[], tocSet: Set<number>, pc: PagesContent, geo: FigGeometry): PageNumbers {
+	const { colW, colH, lineH } = geo;
+	const charsPerLine = Math.max(10, Math.floor(colW / avgCharWidth(host)));
+	const g = { charsPerLine, linesPerPage: Math.max(1, colH / lineH) };
+	return new PageNumbers(
+		chunks.map((c, i) => {
+			const paras: { chars: number; heading: boolean }[] = [];
+			for (let p = c.fromPara; p < c.toPara; p++) {
+				paras.push({ chars: host.book.paragraphs[p]?.length ?? 0, heading: tocSet.has(p) });
+			}
+			let extra = 0;
+			for (const ix of (pc.imgOfChunk[i] ?? []).filter((k) => pc.shown(k))) {
+				const im = pc.images[ix];
+				const d = pc.dims[ix] as { w: number; h: number };
+				const hasCap = !!im.caption || !!im.title;
+				const maxH = hasCap ? Math.max(3 * lineH, colH - 2 * lineH) : colH;
+				extra += Math.max(1, Math.ceil(fitSize(d.w, d.h, colW, Math.min(maxH, colH)).h / lineH));
+				if (im.title) extra += paraLines(im.title.length, charsPerLine, 0);
+			}
+			return estimateChunkPages(paras, extra, g);
+		}),
+	);
 }

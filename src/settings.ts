@@ -12,6 +12,8 @@ export interface Settings {
 	pageSize: number;
 	lineHeight: number;
 	justify: boolean;
+	/** Листание: колонками-страницами или лентой; авто — лента на телефоне (грубый указатель). */
+	pageFlow: "auto" | "pages" | "ribbon";
 	// По слову
 	wpm: number;
 	wordSize: number;
@@ -42,6 +44,7 @@ export const DEFAULTS: Settings = {
 	pageSize: narrow ? 19 : 21,
 	lineHeight: 1.55,
 	justify: false,
+	pageFlow: "auto",
 	wpm: 300,
 	wordSize: narrow ? 48 : 80,
 	sound: true,
@@ -78,7 +81,7 @@ export function saveSettings(s: Settings): void {
 	}
 }
 
-const media = typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+const media = typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 
 export function applyTheme(s: Settings): void {
 	const t = s.theme === "auto" ? (media?.matches ? "dark" : "light") : s.theme;

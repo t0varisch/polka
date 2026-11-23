@@ -2,8 +2,10 @@
 // и режим папки (?testfolder, только chromium).
 // Сначала `npm run build`: скрипт без BASE сам поднимает `vite preview` на собранном dist/.
 // Рисунки: IMG_BOOK=путь.fb2 вместо BOOK — сценарий с рисунками на страницах и просмотром на весь экран.
+// ONLY=ribbon — только сценарии ленты.
 // Запуск: BOOK=путь.fb2 [SIZES=390x844,320x640,1280x800] [BROWSER=chromium|webkit] [BASE=http://...] [OUT=test-output] node scripts/e2e.mjs
 // Поиск по книге (searchFlow) идёт в сценарии BOOK=, не в IMG_BOOK.
+// Старые сценарии идут с настройкой «Листание: страницами»; лента — в ribbonFlow (BOOK=) и ribbonImgFlow (IMG_BOOK=).
 import { chromium, webkit } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
@@ -60,6 +62,20 @@ process.on("exit", stopServer);
 const launcher = BROWSER === "webkit" ? webkit : chromium;
 const browser = await (BROWSER === "chromium" ? launcher.launch({ channel: "chrome" }).catch(() => launcher.launch()) : launcher.launch());
 
+// Контекст с явным выбором листания: с hasTouch Chromium может считать указатель грубым, и «авто» открыло бы ленту во всех старых сценариях.
+// flow: "pages" (по умолчанию), "ribbon" или null — настройку не трогаем (проверка «авто»)
+async function newCtx(opts, flow = "pages") {
+	const ctx = await browser.newContext(opts);
+	if (flow) {
+		await ctx.addInitScript((f) => {
+			try {
+				if (!localStorage.getItem("polka:settings")) localStorage.setItem("polka:settings", JSON.stringify({ pageFlow: f }));
+			} catch {}
+		}, flow);
+	}
+	return ctx;
+}
+
 const dw = (p) => p.evaluate(() => Number(document.querySelector("div.book").dataset.word));
 const dm = (p) => p.evaluate(() => document.querySelector("div.book").dataset.mode);
 const onOpenPage = (p) =>
@@ -108,7 +124,7 @@ async function toMode(page, m, ready) {
 }
 
 async function browserFlow(W, H, tag) {
-	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
 	const shot = (n) => page.screenshot({ path: `${OUT}/${tag}-browser-${n}.png` });
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message)); // это предупреждение WebKit безобидно
@@ -289,7 +305,7 @@ async function findImageOnlyPage(page) {
 const imgSel = (i) => 'img.pg-img[data-i="' + i + '"]';
 
 async function imgFlow(W, H, tag) {
-	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
 	const shot = (n) => page.screenshot({ path: `${OUT}/${tag}-img-${n}.png` });
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
@@ -441,7 +457,7 @@ const pickPhrase = (p, frac) =>
 
 // Сквозные страницы: номер в подвале растёт ровно на 1, в том числе через границу куска; первая страница — 1, последняя — M
 async function pageNumberFlow(W, H, tag) {
-	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
 	const num = () =>
@@ -536,7 +552,7 @@ async function pageNumberFlow(W, H, tag) {
 
 // Поиск по книге: Ctrl+F / F3 / кнопка открывают лист, найденное открывается в каждом из трёх режимов
 async function searchFlow(W, H, tag) {
-	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
 	const shot = (n) => page.screenshot({ path: `${OUT}/${tag}-search-${n}.png` });
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
@@ -648,7 +664,7 @@ async function searchFlow(W, H, tag) {
 }
 
 async function folderFlow(W, H, tag) {
-	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
 	const shot = (n) => page.screenshot({ path: `${OUT}/${tag}-folder-${n}.png` });
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message)); // это предупреждение WebKit безобидно
@@ -708,7 +724,7 @@ async function folderFlow(W, H, tag) {
 
 // Засечки глав: на линии места и на ползунке «Позиция»; шапка и лист без горизонтальной прокрутки
 async function ticksFlow(W, H, tag) {
-	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
 	try {
@@ -744,7 +760,7 @@ async function ticksFlow(W, H, tag) {
 
 // Анимация листания: съезд, быстрые касания подряд, ведение пальцем, граница куска, «уменьшить движение»
 async function animFlow(W, H, tag) {
-	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
 	const num = () =>
@@ -914,7 +930,7 @@ async function animFlow(W, H, tag) {
 	await ctx.close();
 
 	// «уменьшить движение»: без перехода, листание мгновенное, свайп листает как раньше
-	const ctx2 = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true, reducedMotion: "reduce" });
+	const ctx2 = await newCtx({ viewport: { width: W, height: H }, hasTouch: true, reducedMotion: "reduce" });
 	const p2 = await ctx2.newPage();
 	try {
 		await p2.goto(base);
@@ -949,7 +965,7 @@ async function animFlow(W, H, tag) {
 
 // Закладка из выделенного текста: цитата в списке, подсветка pg-mark, выделение снято — закладка с цитатой ещё 2 с
 async function markFlow(W, H, tag) {
-	const ctx = await browser.newContext({ viewport: { width: W, height: H }, hasTouch: true });
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
 	const page = await ctx.newPage();
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
 	page.on("console", (m) => m.type() === "error" && step(false, `${tag} ошибка в консоли`, m.text()));
@@ -1124,16 +1140,481 @@ async function markFlow(W, H, tag) {
 	await ctx.close();
 }
 
+// ---- Лента (раскладка «Страниц» для пальца)
+const rbScroll = (p) => p.evaluate(() => document.querySelector(".rb-window").scrollTop);
+// Ждёт, пока прокрутка ленты постоит на месте 200 мс: плавная прокрутка — не CSS-анимация, settle её не видит
+async function rbSettle(p) {
+	let last = -1e9;
+	let still = 0;
+	for (let i = 0; i < 120 && still < 4; i++) {
+		const t = await rbScroll(p);
+		still = Math.abs(t - last) < 0.5 ? still + 1 : 0;
+		last = t;
+		await p.waitForTimeout(50);
+	}
+	await p.waitForTimeout(250); // пауза «дальний кусок убирается»
+}
+// Строки и рисунки окна ленты в порядке чтения: строка — по центру первого слова, подпись рисунка — часть рисунка.
+// id строки — её первое слово, id рисунка — его номер: по ним проверяем место, не завися от координат (убранный сверху кусок их сдвигает)
+const rbItems = (p) =>
+	p.evaluate(() => {
+		const win = document.querySelector(".rb-window");
+		const wr = win.getBoundingClientRect();
+		const lh = parseFloat(getComputedStyle(document.querySelector(".rb-content")).lineHeight);
+		const items = [];
+		for (const fg of win.querySelectorAll("figure")) {
+			const r = fg.getBoundingClientRect();
+			items.push({ top: r.top, bottom: r.bottom, id: "f" + fg.querySelector("img").dataset.i, fig: true });
+		}
+		let lastTop = -1e9;
+		let lastSec = null;
+		for (const sp of win.querySelectorAll("span[data-w]")) {
+			if (sp.closest("figure")) continue;
+			const r = sp.getClientRects()[0]; // слово с переносом по дефису — первая строка
+			const mid = (r.top + r.bottom) / 2;
+			const sec = sp.closest("section");
+			// слова одной строки (центр в пределах 5 px) — одна строка
+			if (sp.parentElement === lastSec && Math.abs(mid - lastTop) <= 5) continue;
+			lastTop = mid;
+			lastSec = sp.parentElement;
+			items.push({ top: mid - lh / 2, bottom: mid + lh / 2, id: "w" + sp.dataset.w, word: Number(sp.dataset.w), chunk: Number(sec.dataset.i) });
+		}
+		items.sort((a, b) => a.top - b.top);
+		return { items, wr: { top: wr.top, bottom: wr.bottom, left: wr.left, width: wr.width, height: wr.height }, lh, st: win.scrollTop, sections: win.querySelectorAll("section.rb-chunk").length };
+	});
+const rbMetrics = async (p) => {
+	const { items, wr, lh, st, sections } = await rbItems(p);
+	const top = items.find((it) => !it.fig && it.top >= wr.top - 1.5 && it.bottom <= wr.bottom + 1.5);
+	const first = items.find((it) => it.top >= wr.top - 1.5);
+	const nx = items.find((it) => it.bottom > wr.bottom + 0.5 && it.top > wr.top + 0.5);
+	return {
+		top: top ? { word: top.word, chunk: top.chunk } : null,
+		topId: first?.id,
+		nextId: nx?.id,
+		H: wr.height,
+		y: wr.top,
+		x: wr.left,
+		w: wr.width,
+		lh,
+		st,
+		nextTop: nx ? st + (nx.top - wr.top) : null,
+		sections,
+	};
+};
+// Верхи строк и рисунков в координатах содержимого окна
+const rbLines = async (p) => {
+	const { items, wr, st } = await rbItems(p);
+	return items.map((it) => ({ top: st + it.top - wr.top, id: it.id }));
+};
+// Слово w стоит в верхней строке окна (строка видна целиком, верх ±1.5 px)
+const rbWordOnTop = (p, w) =>
+	p.evaluate((w) => {
+		const win = document.querySelector(".rb-window");
+		const wr = win.getBoundingClientRect();
+		const lh = parseFloat(getComputedStyle(document.querySelector(".rb-content")).lineHeight);
+		const sp = win.querySelector(`span[data-w="${w}"]`);
+		if (!sp) return false;
+		const r = sp.getClientRects()[0];
+		const top = (r.top + r.bottom) / 2 - lh / 2;
+		return Math.abs(top - wr.top) <= 1.5;
+	}, w);
+const rbNum = (p) => p.evaluate(() => Number(/стр\. (\d+) из (\d+)/.exec(document.querySelector(".pg-foot")?.textContent ?? "")?.[1]));
+// Касание по рисунку открывает просмотр, а не листает: точку берём там, где рисунка нет
+const rbTap = async (p, side) => {
+	const m = await rbMetrics(p);
+	const x = m.x + m.w * (side === "right" ? 0.8 : 0.15);
+	const y = await p.evaluate(
+		([x, y0, h]) => {
+			for (const k of [0.5, 0.15, 0.85, 0.3, 0.7, 0.05, 0.95]) {
+				const el = document.elementFromPoint(x, y0 + h * k);
+				if (el && !el.closest("img.pg-img")) return y0 + h * k;
+			}
+			return y0 + h / 2;
+		},
+		[x, m.y, m.H],
+	);
+	await p.touchscreen.tap(x, y);
+	await rbSettle(p);
+};
+async function openRibbon(page, ready = ".rb-window span[data-w]") {
+	await toMode(page, "pages", ready);
+	await page.waitForTimeout(400);
+}
+
+async function ribbonFlow(W, H, tag) {
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true }, "ribbon");
+	const page = await ctx.newPage();
+	const shot = (n) => page.screenshot({ path: `${OUT}/${tag}-ribbon-${n}.png` });
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} лента: ошибка страницы`, e.message));
+	page.on("console", (m) => m.type() === "error" && step(false, `${tag} лента: ошибка в консоли`, m.text()));
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await openRibbon(page);
+		step(!!(await page.$(".mode-ribbon .rb-window")) && !(await page.$(".pg-viewport")), `${tag} лента: открыта настройкой, колонок нет`);
+		step(!(await hscroll(page)), `${tag} лента: нет горизонтальной прокрутки`);
+		const m0 = await rbMetrics(page);
+		step(m0.st === 0 && m0.top?.word === (await dw(page)) && (await rbNum(page)) === 1, `${tag} лента: начало книги, страница 1`, JSON.stringify({ st: m0.st, top: m0.top, n: await rbNum(page) }));
+		await shot("1-start");
+
+		// прокрутка на полтора экрана: место сдвинулось, верхнее слово видно целиком
+		const w0 = await dw(page);
+		await page.evaluate((h) => document.querySelector(".rb-window").scrollBy(0, h * 1.5), m0.H);
+		await rbSettle(page);
+		const m1 = await rbMetrics(page);
+		const w1 = await dw(page);
+		step(w1 > w0 && m1.top?.word === w1, `${tag} лента: прокрутка на 1,5 экрана, место вперёд, верхнее слово видно целиком`, `${w0} -> ${w1}, верх ${m1.top?.word}`);
+		await shot("2-mid");
+
+		// касание справа: новый верх = низ прежней последней целой строки; слева — прежний верх
+		await rbTap(page, "right");
+		const m2 = await rbMetrics(page);
+		step(Math.abs(m2.st - m1.nextTop) <= 1.2, `${tag} лента: касание справа — верх на строке, что не влезла`, `${m1.st} -> ${m2.st}, ждали ${m1.nextTop?.toFixed(1)}`);
+		step(m2.top?.word === (await dw(page)) && (await dw(page)) > w1, `${tag} лента: после касания место — верхнее слово`, `${w1} -> ${await dw(page)}`);
+		await shot("3-after-tap");
+		await rbTap(page, "left");
+		const m3 = await rbMetrics(page);
+		step(Math.abs(m3.st - m1.st) <= 1.2, `${tag} лента: касание слева — прежний верх`, `${m2.st} -> ${m3.st}, был ${m1.st}`);
+
+		// клавиши: вперёд (пробел, PageDown, →) и назад (←, PageUp); экран узнаём по строке, что не влезла
+		let prev = m3;
+		let ok = true;
+		for (const key of ["Space", "PageDown", "ArrowRight"]) {
+			await page.keyboard.press(key);
+			await rbSettle(page);
+			const m = await rbMetrics(page);
+			ok = ok && m.topId === prev.nextId;
+			prev = m;
+		}
+		step(ok, `${tag} лента: клавиши Пробел, PageDown, → листают на экран`, `верх ${prev.topId}`);
+		let mb = null;
+		for (const key of ["ArrowLeft", "PageUp", "ArrowLeft"]) {
+			await page.keyboard.press(key);
+			await rbSettle(page);
+			mb = await rbMetrics(page);
+		}
+		step(mb.topId === m3.topId, `${tag} лента: три раза назад — на исходный экран`, `${mb.topId} ждали ${m3.topId}`);
+
+		// колесо мыши: одна засечка — одна строка; мелкая дельта (тачпад) копится до строки
+		await page.mouse.move(m0.x + m0.w / 2, m0.y + m0.H / 2);
+		await page.evaluate(() => document.querySelector(".rb-window").scrollBy(0, 4000)); // в плотный текст: у начала книги строки перемежаются рисунками
+		await rbSettle(page);
+		const topIdAfter = async () => (await rbMetrics(page)).topId;
+		const nextLines = async () => {
+			const st = (await rbMetrics(page)).st;
+			const lt = await rbLines(page);
+			const i = lt.findIndex((l) => l.top > st + 1);
+			return lt.slice(i);
+		};
+		const L = await nextLines(); // L[0] — следующая строка после текущего верха
+		for (let i = 0; i < 3; i++) await page.mouse.wheel(0, 100);
+		await rbSettle(page);
+		const id1 = await topIdAfter();
+		step(id1 === L[2].id, `${tag} лента: колесо вниз 3 раза — ровно три строки`, `верх ${id1}, ждали ${L[2].id}`);
+		await page.mouse.wheel(0, -100);
+		await rbSettle(page);
+		const id2 = await topIdAfter();
+		step(id2 === L[1].id, `${tag} лента: колесо вверх — одна строка назад`, `верх ${id2}, ждали ${L[1].id}`);
+		const L2 = await nextLines();
+		for (let i = 0; i < 2; i++) await page.mouse.wheel(0, 10);
+		await page.waitForTimeout(100);
+		const stMid = (await rbMetrics(page)).st;
+		await rbSettle(page);
+		step((await topIdAfter()) === id2, `${tag} лента: две мелкие дельты (20 px) — строка ещё не набралась`, `${stMid}`);
+		for (let i = 0; i < 3; i++) await page.mouse.wheel(0, 10);
+		await rbSettle(page);
+		const id3 = await topIdAfter();
+		step(id3 === L2[0].id, `${tag} лента: 20 и ещё 30 px мелкими дельтами — одна строка`, `верх ${id3}, ждали ${L2[0].id}`);
+		// стрелки вверх и вниз — по строке
+		const L3 = await nextLines();
+		for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowDown");
+		await rbSettle(page);
+		const id4 = await topIdAfter();
+		step(id4 === L3[2].id, `${tag} лента: ↓ три раза — три строки`, `верх ${id4}, ждали ${L3[2].id}`);
+		await page.keyboard.press("ArrowUp");
+		await rbSettle(page);
+		const id5 = await topIdAfter();
+		step(id5 === L3[1].id, `${tag} лента: ↑ — одна строка назад`, `верх ${id5}, ждали ${L3[1].id}`);
+		step((await rbMetrics(page)).top?.word === (await dw(page)), `${tag} лента: после колеса место — верхнее слово`);
+		await rbTap(page, "left"); // дальше сценарий идёт от экрана, а не от строки
+		// свайп (только Chromium: CDP): влево — вперёд, вправо — назад
+		if (BROWSER === "chromium") {
+			const cdp = await ctx.newCDPSession(page);
+			const swipe = async (x0, x1) => {
+				const y = m0.y + m0.H / 2;
+				await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: x0, y }] });
+				for (let i = 1; i <= 6; i++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x0 + ((x1 - x0) * i) / 6, y }] });
+				await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+				await rbSettle(page);
+			};
+			const s0 = await rbMetrics(page);
+			await swipe(m0.x + m0.w * 0.8, m0.x + m0.w * 0.3);
+			const s1 = await rbMetrics(page);
+			step(Math.abs(s1.st - s0.nextTop) <= 1.2, `${tag} лента: свайп влево — экран вперёд`, `${s0.st} -> ${s1.st}`);
+			await swipe(m0.x + m0.w * 0.3, m0.x + m0.w * 0.8);
+			step(Math.abs((await rbMetrics(page)).st - s0.st) <= 1.2, `${tag} лента: свайп вправо — прежний экран`, `${s0.st}`);
+		}
+
+		// граница куска: до конца первого куска три экрана, дальше 15 касаний вперёд
+		await page.evaluate(() => {
+			const win = document.querySelector(".rb-window");
+			const first = win.querySelector("section.rb-chunk");
+			win.scrollTop = first.offsetTop + first.offsetHeight - 3 * win.clientHeight;
+		});
+		await rbSettle(page);
+		const chunk0 = (await rbMetrics(page)).top?.chunk;
+		let nums = [await rbNum(page)];
+		let maxSections = 0;
+		let maxVisible = 0;
+		const tooMany = [];
+		const visibleSections = (p) => p.evaluate(() => { const w = document.querySelector(".rb-window").getBoundingClientRect(); return [...document.querySelectorAll(".rb-window section")].filter((s) => { const r = s.getBoundingClientRect(); return r.bottom > w.top && r.top < w.bottom; }).length; });
+		const chunksSeen = new Set([chunk0]);
+		for (let i = 0; i < 15; i++) {
+			await rbTap(page, "right");
+			const m = await rbMetrics(page);
+			maxSections = Math.max(maxSections, m.sections);
+			const vis = await visibleSections(page);
+			maxVisible = Math.max(maxVisible, vis);
+			if (m.sections > Math.max(3, vis)) tooMany.push(`${m.sections}/${vis}`);
+			chunksSeen.add(m.top?.chunk);
+			nums.push(await rbNum(page));
+		}
+		step(chunksSeen.size >= 2, `${tag} лента: 15 касаний вперёд прошли границу главы`, [...chunksSeen].join(","));
+		step(nums.every((n, i) => i === 0 || n >= nums[i - 1]) && nums[nums.length - 1] > nums[0], `${tag} лента: номер страницы растёт`, nums.join(" "));
+		step(tooMany.length === 0, `${tag} лента: в DOM не больше 3 кусков после паузы (больше — только если на экране больше)`, `макс ${maxSections}, на экране ${maxVisible}, нарушения ${tooMany.join(" ")}`);
+		await page.waitForTimeout(300);
+		step((await rbMetrics(page)).sections <= Math.max(3, await visibleSections(page)), `${tag} лента: после паузы 300 мс — не больше 3 кусков`);
+		// назад через границу: тот же путь по экранам
+		const back = [];
+		for (let i = 0; i < 15; i++) {
+			await rbTap(page, "left");
+			back.push(Math.round((await rbMetrics(page)).st));
+		}
+		const end = await rbMetrics(page);
+		step(end.top?.chunk === chunk0 && end.sections <= Math.max(3, await visibleSections(page)), `${tag} лента: 15 касаний назад вернули в тот же кусок`, `кусок ${end.top?.chunk} ждали ${chunk0}, секций ${end.sections}, верх ${back.join(" ")}`);
+
+		// поиск фразы на ~60% книги: слово совпадения — в верхней строке
+		const pick = await pickPhrase(page, 0.6);
+		if (!step(!!pick, `${tag} лента: фраза для поиска найдена`)) throw new Error("нет фразы");
+		await page.keyboard.press("Control+f");
+		await page.waitForSelector(".sheet-backdrop.open .search input", { timeout: 3000 });
+		await page.waitForTimeout(300);
+		await page.keyboard.type(pick.phrase.toUpperCase().replace(/Ё/g, "Е"), { delay: 5 });
+		await page.waitForTimeout(600);
+		const first = await page.$(".search-item");
+		if (!step(!!first, `${tag} лента: поиск нашёл фразу`)) throw new Error("нет совпадений");
+		const target = Number(await first.getAttribute("data-word"));
+		await first.click();
+		await page.waitForTimeout(700);
+		step((await dw(page)) === target && (await rbWordOnTop(page, target)), `${tag} лента: поиск — слово совпадения в верхней строке`, `${await dw(page)} == ${target}`);
+		step((await page.evaluate(() => !!document.querySelector(".rb-window span.here"))), `${tag} лента: слово совпадения подсвечено`);
+		await shot("4-search");
+
+		// «По слову» и обратно: то же слово наверху
+		await toMode(page, "words", ".mode-words .word .p");
+		const ww = await dw(page);
+		await toMode(page, "pages", ".rb-window span[data-w]");
+		await page.waitForTimeout(400);
+		step((await dw(page)) === ww && (await rbWordOnTop(page, ww)), `${tag} лента: «По слову» и назад — то же слово наверху`, `${ww} -> ${await dw(page)}`);
+
+		// размер шрифта: верхнее слово то же
+		const openSettings = async () => {
+			await page.click('[aria-label="Настройки"]');
+			await page.waitForSelector('.sheet-backdrop input[aria-label="Размер текста"]');
+		};
+		const wf = await dw(page);
+		await openSettings();
+		const size = page.locator('.sheet-backdrop input[aria-label="Размер текста"]');
+		const size0 = await size.inputValue();
+		await size.fill("28");
+		await page.waitForTimeout(800);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(600);
+		step((await dw(page)) === wf && (await rbWordOnTop(page, wf)), `${tag} лента: размер текста 28 px, верхнее слово то же`, `${wf} -> ${await dw(page)}`);
+		await openSettings();
+		await page.locator('.sheet-backdrop input[aria-label="Размер текста"]').fill(size0);
+		await page.waitForTimeout(800);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(600);
+		step((await dw(page)) === wf && (await rbWordOnTop(page, wf)), `${tag} лента: размер текста вернули, верхнее слово то же`, `${wf} -> ${await dw(page)}`);
+
+		// смена окна: верхнее слово то же
+		const alt = W >= 800 ? [390, 844] : [W === 390 ? 1280 : 1100, 700];
+		await page.setViewportSize({ width: alt[0], height: alt[1] });
+		await page.waitForTimeout(1000);
+		step((await dw(page)) === wf && (await rbWordOnTop(page, wf)) && !(await hscroll(page)), `${tag} лента: окно ${alt[0]}x${alt[1]}, верхнее слово то же`, `${wf} -> ${await dw(page)}`);
+		await page.setViewportSize({ width: W, height: H });
+		await page.waitForTimeout(1000);
+		step((await dw(page)) === wf && (await rbWordOnTop(page, wf)), `${tag} лента: окно вернули, верхнее слово то же`);
+
+		// закладка из выделенного: шесть слов
+		const mt = await rbMetrics(page);
+		const q0 = mt.top.word;
+		const quote = await page.evaluate((a) => {
+			const r = document.createRange();
+			r.setStartBefore(document.querySelector(`.rb-window span[data-w="${a}"]`));
+			r.setEndAfter(document.querySelector(`.rb-window span[data-w="${a + 5}"]`));
+			const sel = getSelection();
+			sel.removeAllRanges();
+			sel.addRange(r);
+			return r.toString().replace(/\s+/g, " ").trim();
+		}, q0);
+		await page.waitForTimeout(150);
+		await page.click('[aria-label="Закладка здесь"]');
+		await page.waitForTimeout(400);
+		const marked = await page.evaluate(() => [...document.querySelectorAll(".rb-window span.pg-mark")].map((e) => Number(e.dataset.w)));
+		step(marked.length === 6 && marked[0] === q0 && marked[5] === q0 + 5, `${tag} лента: закладка-цитата — подсвечены 6 слов`, marked.join(","));
+		step((await page.textContent("#toast")) === "Цитата в закладках", `${tag} лента: тост «Цитата в закладках»`);
+		await page.click('[aria-label="Оглавление и закладки"]');
+		await page.waitForSelector(".sheet-backdrop");
+		await page.click('.sheet-backdrop [role="tab"]:nth-of-type(2)');
+		const list = await page.evaluate(() => [...document.querySelectorAll(".sheet-backdrop .mark-go > span")].map((e) => ({ t: e.textContent, quote: e.classList.contains("mark-quote") })));
+		step(list.length === 1 && list[0].quote && list[0].t === `«${quote}»`, `${tag} лента: в списке закладок цитата`, JSON.stringify(list));
+		await page.click('.sheet-backdrop [aria-label="Удалить закладку"]');
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(400);
+		step((await page.evaluate(() => document.querySelectorAll(".rb-window span.pg-mark").length)) === 0, `${tag} лента: удалили закладку — подсветка пропала`);
+
+		// строка «Листание»: на колонки и обратно, место то же
+		const wl = await dw(page);
+		await openSettings();
+		await page.click('.sheet-backdrop [aria-label="Листание"] button:has-text("Страницами")');
+		await page.waitForSelector(".pg-viewport .pg-content span[data-w]", { timeout: 10000 });
+		await page.waitForTimeout(600);
+		step(!(await page.$(".sheet-backdrop")) || !(await page.$(".sheet-backdrop.open")), `${tag} лента: после смены раскладки лист настроек закрыт`);
+		step(!(await page.$(".rb-window")) && (await onOpenPage(page)) && (await dw(page)) === wl, `${tag} лента: «Страницами» — колонки на том же слове`, `${wl} -> ${await dw(page)}`);
+		await openSettings();
+		await page.click('.sheet-backdrop [aria-label="Листание"] button:has-text("Лентой")');
+		await page.waitForSelector(".rb-window span[data-w]", { timeout: 10000 });
+		await page.waitForTimeout(600);
+		step(!(await page.$(".pg-viewport")) && (await dw(page)) === wl && (await rbWordOnTop(page, wl)), `${tag} лента: «Лентой» — лента на том же слове наверху`, `${wl} -> ${await dw(page)}`);
+		step(!(await hscroll(page)), `${tag} лента: нет горизонтальной прокрутки в конце`);
+	} catch (e) {
+		step(false, `${tag} лента: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-ribbon-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+
+	// без настройки на телефоне (грубый указатель) открывается лента; в WebKit isMobile нет
+	if (BROWSER === "chromium") {
+		const mctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true, isMobile: true }, null);
+		const mp = await mctx.newPage();
+		try {
+			await mp.goto(base);
+			await mp.waitForSelector(".library .actions");
+			await mp.setInputFiles('input[type="file"]', BOOK);
+			await mp.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+			await toMode(mp, "pages", ".pg-content span[data-w]");
+			step(!!(await mp.$(".mode-ribbon .rb-window")) && !(await mp.$(".pg-viewport")), `${tag} лента: isMobile без настройки открывает ленту`);
+			await mp.screenshot({ path: `${OUT}/${tag}-ribbon-mobile.png` });
+		} catch (e) {
+			step(false, `${tag} лента: isMobile — сценарий оборвался`, String(e.message).split("\n")[0]);
+		}
+		await mctx.close();
+		const dctx = await newCtx({ viewport: { width: W, height: H } }, null);
+		const dp = await dctx.newPage();
+		try {
+			await dp.goto(base);
+			await dp.waitForSelector(".library .actions");
+			await dp.setInputFiles('input[type="file"]', BOOK);
+			await dp.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+			await toMode(dp, "pages", ".pg-content span[data-w]");
+			step(!!(await dp.$(".pg-viewport")) && !(await dp.$(".rb-window")), `${tag} лента: мышь без настройки — колонки`);
+		} catch (e) {
+			step(false, `${tag} лента: мышь — сценарий оборвался`, String(e.message).split("\n")[0]);
+		}
+		await dctx.close();
+	}
+}
+
+// Лента и рисунки: не выше экрана, обрезанный внизу рисунок открывает следующий экран
+async function ribbonImgFlow(W, H, tag) {
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true }, "ribbon");
+	const page = await ctx.newPage();
+	const shot = (n) => page.screenshot({ path: `${OUT}/${tag}-ribbon-${n}.png` });
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} лента: ошибка страницы`, e.message));
+	page.on("console", (m) => m.type() === "error" && step(false, `${tag} лента: ошибка в консоли`, m.text()));
+	const figs = () =>
+		page.evaluate(() => {
+			const win = document.querySelector(".rb-window");
+			const wr = win.getBoundingClientRect();
+			return [...win.querySelectorAll("figure.pg-fig")].map((f) => {
+				const r = f.getBoundingClientRect();
+				const im = f.querySelector("img");
+				return { i: im.dataset.i, top: r.top - wr.top, bottom: r.bottom - wr.top, h: r.height, ok: im.complete && im.naturalWidth > 0 };
+			});
+		});
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await openRibbon(page);
+		let tallest = 0;
+		let seen = new Set();
+		let cut = null;
+		let shownFig = false;
+		for (let n = 0; n < 260; n++) {
+			const m = await rbMetrics(page);
+			const fs = await figs();
+			for (const f of fs) {
+				seen.add(f.i);
+				tallest = Math.max(tallest, f.h);
+			}
+			const vis = fs.find((f) => f.top >= 0 && f.bottom <= m.H);
+			if (vis && !shownFig) {
+				shownFig = true;
+				await shot("5-figure");
+			}
+			// рисунок виден, но обрезан внизу
+			const c = cut ? null : fs.find((f) => f.top > 1 && f.top < m.H - 1 && f.bottom > m.H + 1);
+			if (c) {
+				cut = { id: c.i, before: m };
+				await shot("6-figure-cut");
+				await rbTap(page, "right");
+				const after = (await figs()).find((f) => f.i === c.i);
+				step(!!after && Math.abs(after.top) <= 1.5, `${tag} лента: рисунок ${c.i} обрезан внизу — следующий экран начинается с него`, after ? `верх рисунка ${after.top.toFixed(1)}` : "нет рисунка");
+				await shot("7-figure-top");
+				// нажатие на рисунок открывает просмотр, нажатие в любом месте закрывает
+				await page.click(`.rb-window img.pg-img[data-i="${c.i}"]`);
+				await page.waitForSelector(".pg-viewer", { timeout: 5000 });
+				step(true, `${tag} лента: нажатие на рисунок открывает просмотр`);
+				await page.mouse.click(W / 2, H / 2);
+				await page.waitForTimeout(300);
+				step(!(await page.$(".pg-viewer")), `${tag} лента: просмотр закрылся`);
+				continue;
+			}
+			const st0 = m.st;
+			await rbTap(page, "right");
+			if ((await rbScroll(page)) === st0) break;
+		}
+		step(seen.size > 0 && tallest <= H, `${tag} лента: рисунки (${seen.size}) не выше экрана`, `самый высокий ${Math.round(tallest)} при окне ${H}`);
+		step(!!cut, `${tag} лента: нашёлся рисунок, обрезанный внизу`);
+		step(!(await hscroll(page)), `${tag} лента: нет горизонтальной прокрутки`);
+	} catch (e) {
+		step(false, `${tag} лента: рисунки — сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-ribbon-img-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+}
+
 console.log(`# ${BROWSER}, книга ${basename(BOOK)}, ${base}, снимки в ${OUT}`);
 for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
 	console.log(`## ${W}x${H}`);
-	await (IMG ? imgFlow : browserFlow)(W, H, tag);
-	if (!IMG) await searchFlow(W, H, tag);
-	await pageNumberFlow(W, H, tag);
-	await ticksFlow(W, H, tag);
-	if (!IMG) await animFlow(W, H, tag);
-	await markFlow(W, H, tag);
+	// ONLY=ribbon — только сценарии ленты (для отладки)
+	if (process.env.ONLY !== "ribbon") {
+		await (IMG ? imgFlow : browserFlow)(W, H, tag);
+		if (!IMG) await searchFlow(W, H, tag);
+		await pageNumberFlow(W, H, tag);
+		await ticksFlow(W, H, tag);
+		if (!IMG) await animFlow(W, H, tag);
+		await markFlow(W, H, tag);
+	}
+	await (IMG ? ribbonImgFlow : ribbonFlow)(W, H, tag);
+	if (process.env.ONLY === "ribbon") continue;
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }
