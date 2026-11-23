@@ -70,10 +70,19 @@
 /* цитата из закладки: мягкий фон (цвет акцента на фоне страницы, без прозрачности — нет тёмных стыков), текст не сдвигается;
    пробел перед соседним выделенным словом закрывает тень этого слова */
 .mode-pages .pg-content span.pg-mark {
+	/* запасной цвет для Safari до 16.2 (там нет color-mix): полупрозрачный акцент темы */
+	background: var(--hl);
 	background: color-mix(in srgb, var(--accent) 18%, var(--bg));
 }
 .mode-pages .pg-content span.pg-mark + span.pg-mark {
+	box-shadow: -0.26em 0 0 var(--hl);
 	box-shadow: -0.26em 0 0 color-mix(in srgb, var(--accent) 18%, var(--bg));
+}
+/* переход к закладке-цитате: вспышка видна поверх подсветки цитаты */
+.mode-pages .pg-content span.pg-mark.here,
+.mode-pages .pg-content span.pg-mark + span.pg-mark.here {
+	background: var(--hl);
+	box-shadow: 0 0 0 2px var(--hl);
 }
 .mode-pages .pg-foot {
 	padding: 8px 20px calc(10px + var(--safe-bottom));

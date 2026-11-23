@@ -840,7 +840,7 @@ async function animFlow(W, H, tag) {
 			const xa = await tx();
 			await swipe(-30, { steps: 5, stepMs: 20, hold: 250 });
 			const xd = await tx();
-			step(Math.abs(xd - (xa - 30)) < 3, `${tag} свайп: страница идёт за пальцем`, `${xa} -> ${xd}`);
+			step(Math.abs(xd - (xa - 22)) < 3, `${tag} свайп: страница идёт за пальцем (минус порог 8 px)`, `${xa} -> ${xd}`);
 			await lift();
 			await page.waitForTimeout(500);
 			step((await num()) === n3 && Math.abs((await tx()) - xa) < 1, `${tag} свайп: 30 px медленно — страница та же, вернулась`, `${n3} -> ${await num()}`);
@@ -877,15 +877,26 @@ async function animFlow(W, H, tag) {
 		const nb = await num();
 		const kb = await chunkKey();
 		if (cdp) {
+			let xb0 = await tx();
 			await swipe(-120, { steps: 6, stepMs: 25 });
+			let shift = (await tx()) - xb0;
 			await lift();
+			// первый кадр после отпускания: новый кусок въезжает от пальца, а не от края
+			let xs = await tx();
 			await page.waitForTimeout(700);
+			let xfin = await tx();
 			step((await chunkKey()) !== kb && (await num()) === nb + 1 && (await wordAtLeft()) && (await onOpenPage(page)), `${tag} свайп: через границу куска — следующая глава, номер +1`, `${nb} -> ${await num()}`);
+			step(shift < -60 && xs - (xfin + pw) < shift / 2 + 10, `${tag} свайп: через границу вперёд — въезд от пальца`, `палец ${shift}, старт ${xs - xfin} (от края ${pw})`);
 			await page.waitForTimeout(450);
+			xb0 = await tx();
 			await swipe(120, { steps: 6, stepMs: 25 });
+			shift = (await tx()) - xb0;
 			await lift();
+			xs = await tx();
 			await page.waitForTimeout(700);
+			xfin = await tx();
 			step((await chunkKey()) === kb && (await num()) === nb && (await onOpenPage(page)), `${tag} свайп: обратно в прежнюю главу, номер -1`, `-> ${await num()}`);
+			step(shift > 60 && xs - (xfin - pw) > shift / 2 - 10, `${tag} свайп: через границу назад — въезд от пальца`, `палец ${shift}, старт ${xs - xfin} (от края ${-pw})`);
 		}
 		// клавиша через границу: новый кусок въезжает справа
 		await page.keyboard.press("ArrowRight");
@@ -1031,6 +1042,81 @@ async function markFlow(W, H, tag) {
 		list = await bookmarkTexts();
 		step(list.length === 1 && !list[0].quote && list[0].t.endsWith("…"), `${tag} закладка-цитата: обычная закладка в списке как раньше`, JSON.stringify(list));
 		step(!(await hscroll(page)), `${tag} закладка-цитата: список без горизонтальной прокрутки`);
+		await page.click('.sheet-backdrop [aria-label="Удалить закладку"]');
+		await closeNav();
+
+		// выделил, перелистнул, нажал значок: выделение ушло со страницей, закладка обычная
+		await select(w1, w1 + 2);
+		await page.waitForTimeout(150);
+		await page.keyboard.press("ArrowRight");
+		await settle(page);
+		await page.waitForTimeout(150);
+		await page.click('[aria-label="Закладка здесь"]');
+		await page.waitForTimeout(300);
+		step((await marked()).length === 0 && (await page.textContent("#toast")) === "Закладка добавлена", `${tag} закладка-цитата: после листания выделение не уходит в закладку`);
+		list = await bookmarkTexts();
+		step(list.length === 1 && !list[0].quote, `${tag} закладка-цитата: после листания закладка обычная`, JSON.stringify(list));
+		await page.click('.sheet-backdrop [aria-label="Удалить закладку"]');
+		await closeNav();
+
+		// выделение вне текста книги касанию листать не мешает; выделение в книге мешает
+		const clickRight = () =>
+			page.evaluate(() => {
+				const v = document.querySelector(".pg-viewport");
+				const r = v.getBoundingClientRect();
+				v.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: r.left + r.width * 0.8, clientY: r.top + r.height / 2 }));
+			});
+		const nowNum = () => page.evaluate(() => Number(/стр\. (\d+)/.exec(document.querySelector(".pg-foot")?.textContent ?? "")?.[1]));
+		await page.waitForTimeout(500);
+		await page.evaluate(() => {
+			const r = document.createRange();
+			r.selectNodeContents(document.querySelector(".pg-foot"));
+			const sel = getSelection();
+			sel.removeAllRanges();
+			sel.addRange(r);
+		});
+		const nA = await nowNum();
+		await clickRight();
+		await settle(page);
+		step((await nowNum()) === nA + 1, `${tag} выделение вне книги: касание листает`, `${nA} -> ${await nowNum()}`);
+		await page.evaluate(() => getSelection().removeAllRanges());
+		const wIn = await page.evaluate(() => Number(document.querySelector(".pg-content span[data-w]").dataset.w));
+		await select(wIn, wIn);
+		const nB = await nowNum();
+		await clickRight();
+		await settle(page);
+		step((await nowNum()) === nB, `${tag} выделение в книге: касание не листает`, `${nB} -> ${await nowNum()}`);
+		await page.evaluate(() => getSelection().removeAllRanges());
+
+		// переход к закладке-цитате: у слова есть и here, и pg-mark, а фон вспышки — не фон цитаты
+		await page.waitForTimeout(500);
+		const wq = await page.evaluate(() => {
+			const w = Number(document.querySelector("div.book").dataset.word);
+			if (document.querySelector(`.pg-content span[data-w="${w + 2}"]`)) return w;
+			return Math.max(...[...document.querySelectorAll(".pg-content span[data-w]")].map((e) => Number(e.dataset.w))) - 2;
+		});
+		await select(wq, wq + 2);
+		await page.waitForTimeout(150);
+		await page.click('[aria-label="Закладка здесь"]');
+		await page.waitForTimeout(300);
+		for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+		await settle(page);
+		list = await bookmarkTexts();
+		step(list.length === 1 && list[0].quote, `${tag} переход к цитате: закладка-цитата в списке`, JSON.stringify(list));
+		await page.click(".sheet-backdrop .mark-go");
+		await page.waitForTimeout(250);
+		const jump = await page.evaluate((w) => {
+			const el = document.querySelector(`.pg-content span[data-w="${w}"]`);
+			const other = document.querySelector(`.pg-content span[data-w="${w + 1}"]`);
+			if (!el || !other) return null;
+			return { here: el.classList.contains("here"), mark: el.classList.contains("pg-mark"), bg: getComputedStyle(el).backgroundColor, markBg: getComputedStyle(other).backgroundColor };
+		}, wq);
+		await page.screenshot({ path: `${OUT}/${tag}-mark-jump.png` });
+		step(!!jump && jump.here && jump.mark && jump.bg !== jump.markBg, `${tag} переход к цитате: here и pg-mark вместе, фон вспышки виден`, JSON.stringify(jump));
+		await page.waitForTimeout(1600);
+		await bookmarkTexts();
+		await page.click('.sheet-backdrop [aria-label="Удалить закладку"]');
+		await closeNav();
 	} catch (e) {
 		step(false, `${tag} закладка-цитата: сценарий оборвался`, String(e.message).split("\n")[0]);
 		await page.screenshot({ path: `${OUT}/${tag}-mark-ERROR.png` }).catch(() => {});

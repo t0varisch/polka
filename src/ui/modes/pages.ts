@@ -399,6 +399,9 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 	}
 
+	/** Сдвиг пальца к моменту отпускания: добавляется к началу въезда нового куска. */
+	let enterShift = 0;
+
 	/** Ставит сдвиг колонок: с анимацией (transition из CSS) или сразу. */
 	function setX(x: number, animate: boolean): void {
 		curX = x;
@@ -419,7 +422,8 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	function showPage(k: number, slide = false, enter: 0 | 1 | -1 = 0): void {
 		page = Math.max(0, Math.min(k, firstOf.length - 1));
 		const x = -page * pageW;
-		if (enter && slide) setX(x + enter * pageW, false);
+		// при листании пальцем новый кусок въезжает от места, где был палец
+		if (enter && slide) setX(x + enter * pageW + enterShift, false);
 		setX(x, slide);
 		updateFoot();
 	}
@@ -468,6 +472,9 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	/** Полная раскладка: геометрия, шрифты, измерение. Место (anchor) не меняется и не сообщается. */
 	async function relayout(): Promise<void> {
 		if (disposed) return;
+		// поворот экрана посреди ведения: старый сдвиг пальца уже не годится
+		dragging = false;
+		content.style.transition = "";
 		const seq = ++layoutSeq;
 		if (!applyGeometry()) return;
 		estimatePages();
@@ -494,7 +501,10 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	}
 
 	function turn(dir: 1 | -1): void {
-		if (disposed || chunkIdx < 0 || viewer) return;
+		if (disposed || chunkIdx < 0 || viewer || !canTurn(dir)) return;
+		// выделение осталось бы на ушедшей странице: закладка взяла бы цитату, которой на экране нет
+		lastSel = null;
+		window.getSelection()?.removeAllRanges();
 		if (dir === 1) {
 			if (page < firstOf.length - 1) showPage(page + 1, true);
 			else if (chunkIdx < chunks.length - 1) {
@@ -592,9 +602,10 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 	/** Палец ведёт страницу: колонки идут за ним без анимации. */
 	let dragging = false;
 	let dragBase = 0;
+	/** Есть непустое выделение внутри текста книги; чужое выделение на странице не в счёт. */
 	const hasSelection = (): boolean => {
 		const sel = window.getSelection();
-		return !!sel && !sel.isCollapsed;
+		return !!sel && !sel.isCollapsed && !!sel.anchorNode && content.contains(sel.anchorNode);
 	};
 	/** Где колонки сейчас на экране (в разгар анимации — не там, куда едут). */
 	function visualX(): number {
@@ -611,7 +622,12 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 		swipedAt = performance.now();
 		const dir = cancel || hasSelection() ? 0 : swipeDecision(dx, ms, pageW, SWIPE_PX);
 		content.style.transition = "";
-		if (dir !== 0) turn(dir);
+		if (dir !== 0) {
+			// сдвиг пальца относительно положения страницы до подмены куска
+			enterShift = visualX() - curX;
+			turn(dir);
+			enterShift = 0;
+		}
 		// не долистали (порог, край книги, просмотр рисунка): вернуть на место
 		setX(curX, true);
 	}
@@ -641,7 +657,9 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 				content.style.transition = "none";
 			}
 			// у края книги — с сопротивлением: втрое меньше пальца
-			const x = dragBase + (canTurn(dx < 0 ? 1 : -1) ? dx : dx / 3);
+			// порог 8 px вычитаем: страница не прыгает в начале ведения
+			const eff = dx - Math.sign(dx) * 8;
+			const x = dragBase + (canTurn(dx < 0 ? 1 : -1) ? eff : eff / 3);
 			content.style.transform = `translateX(${x}px)`;
 		},
 		{ passive: true },
@@ -676,8 +694,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 
 	viewport.addEventListener("click", (e) => {
 		if (performance.now() - swipedAt < 400) return;
-		const sel = window.getSelection();
-		if (sel && !sel.isCollapsed) return;
+		if (hasSelection()) return;
 		const pic = e.target instanceof Element ? e.target.closest("img.pg-img") : null;
 		if (pic) {
 			const f = figs.find((x) => x.img === pic);
@@ -786,6 +803,7 @@ export const pagesMode: ModeFactory = async (host: ModeHost, startWord: number):
 			observer?.disconnect();
 			window.removeEventListener("resize", onResize);
 			document.removeEventListener("keydown", onKey);
+			document.removeEventListener("selectionchange", onSelectionChange);
 			closeViewer();
 			for (const u of urls) if (u) URL.revokeObjectURL(u);
 			urls.length = 0;
