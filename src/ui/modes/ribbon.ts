@@ -4,7 +4,8 @@
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
 import { PageNumbers } from "../../core/pagecount";
-import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop } from "../../core/ribbon";
+import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop, screenGrid, screenIndex } from "../../core/ribbon";
+import { swipeDecision } from "../../core/swipe";
 import type { FontKind, Settings } from "../../settings";
 import { h } from "../dom";
 import { FONT_OPTIONS, range, segmented, toggle } from "../settings-sheet";
@@ -60,6 +61,8 @@ interface Loaded {
 	spans: HTMLElement[];
 	figs: Fig[];
 	lines: Line[];
+	/** Верхи экранов куска от его верха: страницы куска, длина сетки — их число. */
+	grid: number[];
 	top: number;
 	height: number;
 }
@@ -194,6 +197,16 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			else next = lines[k].word;
 		}
 		l.lines = lines;
+		regrid(l);
+	}
+
+	/** Сетка экранов куска по его строкам и высоте окна. */
+	function regrid(l: Loaded): void {
+		l.grid = screenGrid(
+			l.lines.map((x) => x.top),
+			l.lines.map((x) => x.bottom),
+			H,
+		);
 	}
 
 	/** Индекс строк всех кусков; пересчитывается после любых изменений DOM. */
@@ -244,12 +257,12 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		else content.prepend(section);
 		const r = pc.renderChunk(i, section, geo());
 		paintMarks(section, r.spans, c.fromWord, c.toWord, host.bookmarks());
-		const l: Loaded = { i, section, spans: r.spans, figs: r.figs, lines: [], top: 0, height: 0 };
+		const l: Loaded = { i, section, spans: r.spans, figs: r.figs, lines: [], grid: [0], top: 0, height: 0 };
 		if (at === "end") loaded.push(l);
 		else loaded.unshift(l);
 		flat = null;
 		measureLines(l);
-		pageNums.setMeasured(i, Math.max(1, Math.ceil(section.getBoundingClientRect().height / H)));
+		pageNums.setMeasured(i, l.grid.length);
 		if (!ref) return 0;
 		const delta = ref.getBoundingClientRect().top - before;
 		if (delta !== 0) {
@@ -339,17 +352,21 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 
 	// ---- место, подвал
 
-	/** Номер страницы: страниц в кусках до открытого плюс экраны от начала куска. */
+	/**
+	 * Номер страницы: страницы кусков до открытого плюс ячейка сетки экранов куска, в которой стоит прокрутка.
+	 * Последний экран книги (прокрутка в максимуме, последний кусок в DOM) — M из M.
+	 */
 	function updateFoot(): void {
 		const ci = chunkOfWord(chunks, anchor);
 		const l = loaded.find((x) => x.i === ci);
-		let pg = 0;
+		const all = pageNums.total;
+		let n = pageNums.startOf(ci) + 1;
 		if (l) {
 			index();
-			const pages = Math.max(1, Math.ceil(l.height / H));
-			pg = Math.min(pages - 1, Math.max(0, Math.floor((win.scrollTop - l.top) / H)));
+			n += screenIndex(l.grid, win.scrollTop - l.top);
+			if (ci === chunks.length - 1 && win.scrollTop >= win.scrollHeight - win.clientHeight - 1) n = all;
 		}
-		foot.textContent = footText(pageNums.startOf(ci) + pg + 1, pageNums.total, anchor, total);
+		foot.textContent = footText(Math.max(1, Math.min(n, all)), all, anchor, total);
 	}
 
 	/** Место — первое слово верхней строки, видимой целиком; сообщается оболочке. */
@@ -420,7 +437,10 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	function reestimate(): void {
 		pageNums = estimateBookPages(host, chunks, tocSet, pc, geo());
 		index();
-		for (const l of loaded) pageNums.setMeasured(l.i, Math.max(1, Math.ceil(l.height / H)));
+		for (const l of loaded) {
+			regrid(l);
+			pageNums.setMeasured(l.i, l.grid.length);
+		}
 	}
 
 	/** Полная раскладка: геометрия, шрифты, куски вокруг места. Место (anchor) не меняется и не сообщается. */
@@ -610,12 +630,14 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	let multi = false;
 	let tx = 0;
 	let ty = 0;
+	let t0 = 0;
 	win.addEventListener(
 		"touchstart",
 		(e) => {
 			multi = e.touches.length > 1;
 			tx = e.touches[0].clientX;
 			ty = e.touches[0].clientY;
+			t0 = performance.now();
 		},
 		{ passive: true },
 	);
@@ -643,9 +665,13 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			const t = e.changedTouches[0];
 			const dx = t.clientX - tx;
 			const dy = t.clientY - ty;
-			if (Math.abs(dx) >= SWIPE_PX && Math.abs(dx) > Math.abs(dy)) {
-				swipedAt = performance.now();
-				if (!pgSel.has()) turn(dx < 0 ? 1 : -1);
+			// длинный сдвиг или быстрый рывок листает экран; вертикальный ход пальца — прокрутка
+			if (Math.abs(dx) > Math.abs(dy)) {
+				const dir = swipeDecision(dx, performance.now() - t0, win.clientWidth, SWIPE_PX);
+				if (dir !== 0) {
+					swipedAt = performance.now();
+					if (!pgSel.has()) turn(dir);
+				}
 			}
 		},
 		{ passive: true },

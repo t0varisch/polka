@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop } from "./ribbon";
+import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop, screenGrid, screenIndex } from "./ribbon";
 
 /** Строки по 30 px: верх 0, 30, 60…; низ 30, 60, 90… */
 const lines = (n: number) => ({
@@ -98,5 +98,50 @@ describe("nextLineTop / prevLineTop", () => {
 		const t = [0, 30, 60, 100, 400];
 		expect(nextLineTop(t, 60)).toBe(100);
 		expect(prevLineTop(t, 400)).toBe(100);
+	});
+});
+
+describe("screenGrid", () => {
+	it("верхи экранов: от нуля, каждый — nextScreenTop от прежнего", () => {
+		const { tops, bottoms } = lines(20);
+		expect(screenGrid(tops, bottoms, 100)).toEqual([0, 90, 180, 270, 360, 450, 540]);
+	});
+
+	it("нет строк — один экран", () => {
+		expect(screenGrid([], [], 100)).toEqual([0]);
+	});
+
+	it("текст короче экрана — один экран", () => {
+		const { tops, bottoms } = lines(3);
+		expect(screenGrid(tops, bottoms, 100)).toEqual([0]);
+	});
+
+	it("высокий рисунок: рисунок выше экрана — свой экран, остаток пропущен", () => {
+		// строка 0-30, рисунок 30-330, строка 330-360
+		expect(screenGrid([0, 30, 330], [30, 330, 360], 100)).toEqual([0, 30, 330]);
+	});
+});
+
+describe("screenIndex", () => {
+	const grid = [0, 90, 180];
+	it("номер ячейки, в которую попало смещение", () => {
+		expect(screenIndex(grid, 0)).toBe(0);
+		expect(screenIndex(grid, 89)).toBe(0);
+		expect(screenIndex(grid, 90)).toBe(1);
+		expect(screenIndex(grid, 179)).toBe(1);
+		expect(screenIndex(grid, 500)).toBe(2);
+	});
+
+	it("смещение выше куска — первая ячейка", () => {
+		expect(screenIndex(grid, -40)).toBe(0);
+	});
+
+	it("прыжок со строки (верха строки или экрана) попадает в следующую ячейку", () => {
+		const { tops, bottoms } = lines(20);
+		const g = screenGrid(tops, bottoms, 100);
+		for (let off = 0; off < 510; off += 30) {
+			const to = nextScreenTop(tops, bottoms, off, 100);
+			expect(screenIndex(g, to)).toBe(screenIndex(g, off) + 1);
+		}
 	});
 });

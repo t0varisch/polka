@@ -1,5 +1,5 @@
 // Общий код режима «Страницы»: рендер куска, рисунки, подписи, подсветка цитат, выделение для закладки.
-// Им пользуется лента (ribbon.ts); размеры колонки передаются при вызове.
+// Им пользуется лента (ribbon.ts); ширина текста и высота окна (colW, colH) передаются при вызове.
 import type { Chunk } from "../../core/chunks";
 import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "../../core/figures";
 import { estimateChunkPages, PageNumbers, paraLines } from "../../core/pagecount";
@@ -82,7 +82,7 @@ const SEL_KEEP_MS = 2000;
 /** Сколько ждать decode() рисунка с неизвестным размером, мс */
 const PROBE_TIMEOUT = 4000;
 
-/** Размеры, под которые рисуется кусок: ширина колонки, предельная высота рисунка с подписью и без, высота строки. */
+/** Размеры, под которые рисуется кусок: ширина текста ленты (colW), высота окна (colH) — предел высоты рисунка с подписью и без, высота строки. */
 export interface FigGeometry {
 	colW: number;
 	colH: number;
@@ -138,7 +138,7 @@ export function paintMarks(target: HTMLElement, spans: HTMLElement[], fromWord: 
 	}
 }
 
-/** Размер картинки и высота блока: целое число строк, но не больше колонки (иначе Chrome уводит картинку в соседнюю колонку). */
+/** Размер картинки и высота блока: целое число строк, но не выше окна (рисунок выше экрана не поместился бы целиком). */
 function sizeFigure(f: { img: HTMLImageElement; box: HTMLElement }, size: { w: number; h: number }, geo: FigGeometry): void {
 	f.img.style.width = `${size.w}px`;
 	f.img.style.height = `${size.h}px`;
@@ -196,7 +196,7 @@ export function createPagesContent(o: PagesContentOpts): PagesContent {
 		return !!dims[ix] && !bad.has(ix);
 	}
 
-	/** Рисунок с размером под колонку; место под подпись оставлено в maxH. */
+	/** Рисунок с размером под ширину текста и высоту окна; место под подпись оставлено в maxH. */
 	function makeFigure(ix: number, cap: HTMLElement | null, geo: FigGeometry, figs: Fig[]): HTMLElement {
 		const im = images[ix];
 		const hasCap = !!cap || !!im.title;
@@ -225,7 +225,7 @@ export function createPagesContent(o: PagesContentOpts): PagesContent {
 		});
 		img.src = objectUrl(ix);
 		const box = h("div.pg-imgbox", {}, img);
-		// Высота блока — целое число строк, но не больше колонки (иначе Chrome уводит картинку в соседнюю колонку)
+		// Высота блока — целое число строк, но не выше окна
 		const fig = h("figure.pg-fig", {}, box);
 		if (cap) fig.append(cap);
 		else if (im.title) fig.append(h("div.pg-cap", {}, im.title));
@@ -235,7 +235,7 @@ export function createPagesContent(o: PagesContentOpts): PagesContent {
 		return fig;
 	}
 
-	/** Подпись выше резерва в 2 строки: рисунок уменьшается, чтобы вместе с подписью уместиться в колонку. */
+	/** Подпись выше резерва в 2 строки: рисунок уменьшается, чтобы вместе с подписью уместиться в окно. */
 	function fitCaptions(figs: Fig[], geo: FigGeometry): void {
 		for (const f of figs) {
 			if (!f.cap) continue;
@@ -385,7 +385,7 @@ export function createSelection(content: HTMLElement, parts: () => SelPart[]): P
 	};
 }
 
-/** Оценка страниц всех кусков под геометрию: страница — colH высоты, ширина колонки colW; точные числа потом ставит раскладка. */
+/** Оценка страниц всех кусков под геометрию: страница — экран высотой colH, ширина текста colW; точные числа потом ставит раскладка. */
 export function estimateBookPages(host: ModeHost, chunks: Chunk[], tocSet: Set<number>, pc: PagesContent, geo: FigGeometry): PageNumbers {
 	const { colW, colH, lineH } = geo;
 	const charsPerLine = Math.max(10, Math.floor(colW / avgCharWidth(host)));

@@ -33,7 +33,6 @@
 	text-align: left;
 	text-indent: 0;
 	hyphens: manual;
-	break-after: avoid;
 }
 .mode-pages .pg-content span.here {
 	background: var(--hl);
@@ -68,11 +67,10 @@
 	font-variant-numeric: tabular-nums;
 }
 
-/* Рисунки: колонка заполняется как обычный текст, высота блока — целое число строк */
+/* Рисунки: высота блока — целое число строк */
 .mode-pages .pg-fig {
 	margin: 0;
 	padding: 0;
-	break-inside: avoid;
 	text-indent: 0;
 }
 .mode-pages .pg-imgbox {

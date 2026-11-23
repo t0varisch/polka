@@ -508,6 +508,7 @@ async function pageNumberFlow(W, H, tag) {
 		let prev = await num();
 		let prevKey = await chunkKey();
 		const seq = [prev];
+		const keys = [prevKey];
 		let ok = true;
 		let crossed = 0;
 		for (let i = 0; i < 6; i++) {
@@ -515,18 +516,30 @@ async function pageNumberFlow(W, H, tag) {
 			const cur = await num();
 			const key = await chunkKey();
 			seq.push(cur);
-			// номер = экраны от начала куска, а экран короче высоты окна на недобор строки: изредка номер стоит на месте; число страниц ещё не раскладывавшегося куска — оценка, на границе номер перескакивает
+			keys.push(key);
+			// номер растёт ровно на 1 при каждом листании вперёд, в том числе через границу куска
 			const d = cur && prev ? cur[0] - prev[0] : -1;
 			if (key !== prevKey) crossed++;
-			if (d < 0 || (key === prevKey && d > 2)) ok = false;
+			if (d !== 1) ok = false;
 			prev = cur;
 			prevKey = key;
 		}
 		step(crossed >= 1, `${tag} номера: в шести экранах есть граница куска`, String(crossed));
 		const a = seq[seq.length - 1];
 		const b = seq[seq.length - 2];
-		const grown = (seq[seq.length - 1]?.[0] ?? 0) - (seq[0]?.[0] ?? 0);
-		step(ok && grown >= 4, `${tag} номера: шесть экранов вперёд через границу — номер не убывает, внутри куска за экран не больше +2, всего не меньше +4`, seq.map((x) => x?.join("/")).join(" "));
+		step(ok, `${tag} номера: шесть экранов вперёд через границу — каждый раз ровно +1`, seq.map((x, i) => `${x?.join("/")}@${keys[i]}`).join(" "));
+		// назад по стеку верхов — ровно -1 на каждом экране, в том числе через границу
+		let back = true;
+		const seqBack = [a];
+		for (let i = 0; i < 6; i++) {
+			const before = await num();
+			await page.keyboard.press("ArrowLeft");
+			await rbSettle(page);
+			const cur = await num();
+			seqBack.push(cur);
+			if (!before || !cur || before[0] - cur[0] !== 1) back = false;
+		}
+		step(back, `${tag} номера: шесть экранов назад — каждый раз ровно -1`, seqBack.map((x) => x?.join("/")).join(" "));
 		step(!!a && !!b && a[1] === b[1], `${tag} номера: «из M» на последних двух шагах тот же`, `${b?.[1]} ${a?.[1]}`);
 		await page.screenshot({ path: `${OUT}/${tag}-pagenum.png` });
 		step(!(await hscroll(page)), `${tag} номера: нет горизонтальной прокрутки`);
@@ -538,7 +551,7 @@ async function pageNumberFlow(W, H, tag) {
 
 		await seekSlider(1000);
 		const last = await num();
-		step(!!last && last[1] - last[0] <= 1, `${tag} номера: на последнем слове книги номер = M или M - 1 (последний экран короче)`, JSON.stringify(last));
+		step(!!last && last[1] === last[0], `${tag} номера: на последнем слове книги — «M из M»`, JSON.stringify(last));
 		await seekSlider(0);
 		const first2 = await firstPage();
 		step(first2.n?.[0] === 1, `${tag} номера: на первом слове книги — 1`, JSON.stringify(first2));
@@ -850,9 +863,16 @@ async function screenFlow(W, H, tag) {
 			step((await rbNum(page)) === n3 + 1 && (await onOpenPage(page)), `${tag} свайп: 120 px влево — следующий экран`, `${n3} -> ${await rbNum(page)}`);
 			await swipe(120, { steps: 6, stepMs: 25 });
 			step((await rbNum(page)) === n3 && (await onOpenPage(page)), `${tag} свайп: вправо 120 px — назад`, `-> ${await rbNum(page)}`);
+			// быстрый рывок короче порога листает
+			await swipe(-38, { steps: 1, stepMs: 0 });
+			await rbSettle(page);
+			step((await rbNum(page)) === n3 + 1 && (await onOpenPage(page)), `${tag} свайп: быстрый рывок на 38 px — листает`, `${n3} -> ${await rbNum(page)}`);
+			await swipe(120, { steps: 6, stepMs: 25 });
+			await rbSettle(page);
 			// палец вверх-вниз двигает ленту вслед за собой, место — верхняя строка
 			const sv = await rbScroll(page);
 			await swipe(0, { dy: -90, steps: 6, stepMs: 25 });
+			await page.waitForTimeout(300);
 			const sv1 = await rbScroll(page);
 			step(sv1 - sv > 30 && (await onOpenPage(page)), `${tag} палец: вверх на 90 px — лента сдвинулась`, `${sv} -> ${sv1}`);
 			await swipe(0, { dy: 90, steps: 6, stepMs: 25 });
@@ -879,12 +899,12 @@ async function screenFlow(W, H, tag) {
 		const kb = await chunkKey();
 		if (cdp) {
 			await swipe(-120, { steps: 6, stepMs: 25 });
-			step((await chunkKey()) !== kb && (await rbNum(page)) - nb >= 1 && (await rbNum(page)) - nb <= 2 && (await onOpenPage(page)), `${tag} свайп: через границу куска — следующая глава, номер +1 или +2`, `${nb} -> ${await rbNum(page)}`);
+			step((await chunkKey()) !== kb && (await rbNum(page)) - nb === 1 && (await onOpenPage(page)), `${tag} свайп: через границу куска — следующая глава, номер ровно +1`, `${nb} -> ${await rbNum(page)}`);
 			await swipe(120, { steps: 6, stepMs: 25 });
 			step((await chunkKey()) === kb && (await rbNum(page)) === nb && (await onOpenPage(page)), `${tag} свайп: обратно в прежнюю главу, номер -1`, `-> ${await rbNum(page)}`);
 		}
 		await nextScreen(page);
-		step((await chunkKey()) !== kb && (await rbNum(page)) - nb >= 1 && (await rbNum(page)) - nb <= 2 && (await onOpenPage(page)), `${tag} листание: клавиша через границу — следующая глава, номер +1 или +2`, `${nb} -> ${await rbNum(page)}`);
+		step((await chunkKey()) !== kb && (await rbNum(page)) - nb === 1 && (await onOpenPage(page)), `${tag} листание: клавиша через границу — следующая глава, номер ровно +1`, `${nb} -> ${await rbNum(page)}`);
 		await page.screenshot({ path: `${OUT}/${tag}-screen-end.png` });
 		step(!(await hscroll(page)), `${tag} листание: нет горизонтальной прокрутки`);
 	} catch (e) {

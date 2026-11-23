@@ -67,3 +67,29 @@ export function prevLineTop(lineTops: number[], top: number): number {
 	}
 	return lo > 0 ? lineTops[lo - 1] : 0;
 }
+
+/**
+ * Сетка экранов куска: верхи от 0, каждый следующий — nextScreenTop от прежнего, пока тот сдвигается.
+ * Строки и рисунки — только этого куска, в его координатах. Длина сетки — число страниц куска.
+ */
+export function screenGrid(lineTops: number[], lineBottoms: number[], height: number): number[] {
+	const grid = [0];
+	for (;;) {
+		const cur = grid[grid.length - 1];
+		const next = nextScreenTop(lineTops, lineBottoms, cur, height);
+		if (next <= cur + EPS) return grid;
+		grid.push(next);
+	}
+}
+
+/** Номер ячейки сетки (от 0), в которую попало смещение от верха куска: сколько верхов не больше смещения, минус 1. Выше куска — 0. */
+export function screenIndex(grid: number[], offset: number): number {
+	let lo = 0;
+	let hi = grid.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >> 1;
+		if (grid[mid] <= offset + EPS) lo = mid + 1;
+		else hi = mid;
+	}
+	return Math.max(0, lo - 1);
+}
