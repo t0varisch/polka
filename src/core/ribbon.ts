@@ -42,12 +42,6 @@ export function prevScreenTop(lineTops: number[], top: number, height: number): 
 	return lineTops[a];
 }
 
-/** Раскладка «Страниц»: авто — лента на грубом указателе (палец), на остальных страницы колонками. */
-export function resolveFlow(flow: "auto" | "pages" | "ribbon", coarse: boolean): "pages" | "ribbon" {
-	if (flow === "auto") return coarse ? "ribbon" : "pages";
-	return flow;
-}
-
 /** Верх следующей строки: наименьший верх больше top + 1. Нет — top. Для колеса мыши: одна засечка — одна строка. */
 export function nextLineTop(lineTops: number[], top: number): number {
 	const edge = top + 1;

@@ -13,7 +13,6 @@ import {
 	createSelection,
 	detectLang,
 	estimateBookPages,
-	flowRow,
 	FONT_FAMILY,
 	footText,
 	HERE_MS,
@@ -732,7 +731,6 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 				self.applySettings();
 			};
 			return [
-				flowRow(host),
 				segmented<FontKind>("Шрифт", s.pageFont, FONT_OPTIONS, (v) => set("pageFont", v)),
 				range("Размер текста", s.pageSize, 14, 34, 1, (v) => `${v} px`, (v) => set("pageSize", v)),
 				range("Межстрочный интервал", s.lineHeight, 1.2, 2, 0.05, (v) => v.toFixed(2), (v) => set("lineHeight", v)),

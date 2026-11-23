@@ -1,4 +1,4 @@
-/* Режим «Страницы»: окно с колонками CSS, одна колонка — одна страница */
+/* Режим «Страницы»: лента — окно обычной прокрутки, куски идут один под другим */
 .mode-pages {
 	display: grid;
 	grid-template-rows: minmax(0, 1fr) auto;
@@ -7,41 +7,14 @@
 	min-width: 0;
 	overflow: hidden;
 }
-.mode-pages .pg-viewport {
-	position: relative;
-	min-height: 0;
-	min-width: 0;
-	overflow: hidden;
-	cursor: pointer;
-	/* вертикаль и щипок — браузеру, горизонталь — листанию */
-	touch-action: pan-y pinch-zoom;
-}
-.mode-pages .pg-page {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	overflow: hidden;
-}
 .mode-pages .pg-content {
-	position: absolute;
-	left: 0;
-	top: 0;
 	margin: 0;
-	column-fill: auto;
 	font-family: var(--pg-font);
 	font-size: var(--pg-size);
 	color: var(--fg);
 	-webkit-text-size-adjust: 100%;
 	text-size-adjust: 100%;
 	overflow-wrap: break-word;
-	/* листание: колонки съезжают, мягкое торможение */
-	transition: transform 250ms cubic-bezier(0.22, 0.61, 0.36, 1);
-	will-change: transform;
-}
-@media (prefers-reduced-motion: reduce) {
-	.mode-pages .pg-content {
-		transition: none;
-	}
 }
 .mode-pages.justify .pg-content {
 	text-align: justify;
@@ -157,7 +130,7 @@
 	border-radius: 50%;
 }
 
-/* Лента: окно обычной прокрутки, куски идут один под другим; тот же вид текста, что у колонок */
+/* Лента: окно обычной прокрутки, куски идут один под другим */
 .mode-ribbon .rb-window {
 	position: relative;
 	min-height: 0;
@@ -178,11 +151,6 @@
 .mode-ribbon .rb-content {
 	position: relative;
 	margin: 0 auto;
-}
-.mode-ribbon .pg-content.rb-chunk {
-	position: static;
-	transition: none;
-	will-change: auto;
 }
 .mode-ribbon .rb-chunk.first {
 	padding-top: 16px;

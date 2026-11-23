@@ -299,15 +299,10 @@ function mountBook(
 		sheetClosers.push(sheet.close);
 	}
 
-	/** Открытый лист настроек: его строки привязаны к режиму, который при смене раскладки пересоздаётся. */
-	let closeSettings: (() => void) | null = null;
-
 	function openSettingsSheet(): void {
 		if (isDisposed()) return;
 		view?.pause();
-		const close = openSettings(settings, () => ctx.saveSettings(), view?.settingsRows() ?? [], () => (closeSettings = null));
-		closeSettings = close;
-		sheetClosers.push(close);
+		sheetClosers.push(openSettings(settings, () => ctx.saveSettings(), view?.settingsRows() ?? []));
 	}
 
 	const host: ModeHost = {
@@ -330,7 +325,6 @@ function mountBook(
 			touch();
 			scheduleSave();
 		},
-		reopen: () => void reopen(),
 	};
 
 	function setUrl(): void {
@@ -398,30 +392,6 @@ function mountBook(
 					console.error(e2);
 					if (!isDisposed()) showFailure(e2);
 				}
-			}
-		} finally {
-			switching = false;
-			runPending();
-		}
-	}
-
-	/** Пересоздаёт текущий режим на текущем слове: смена раскладки «Страниц» в настройках. */
-	async function reopen(): Promise<void> {
-		if (isDisposed() || starting || switching) return;
-		switching = true;
-		try {
-			const word = view ? view.word() : record.position.word;
-			closeSettings?.();
-			view?.pause();
-			flush();
-			view?.destroy();
-			view = null;
-			body.replaceChildren();
-			try {
-				await startMode(mode, word);
-			} catch (e) {
-				console.error(e);
-				if (!isDisposed()) showFailure(e);
 			}
 		} finally {
 			switching = false;

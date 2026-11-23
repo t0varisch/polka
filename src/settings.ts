@@ -12,8 +12,6 @@ export interface Settings {
 	pageSize: number;
 	lineHeight: number;
 	justify: boolean;
-	/** Листание: колонками-страницами или лентой; авто — лента на телефоне (грубый указатель). */
-	pageFlow: "auto" | "pages" | "ribbon";
 	// По слову
 	wpm: number;
 	wordSize: number;
@@ -44,7 +42,6 @@ export const DEFAULTS: Settings = {
 	pageSize: narrow ? 19 : 21,
 	lineHeight: 1.55,
 	justify: false,
-	pageFlow: "auto",
 	wpm: 300,
 	wordSize: narrow ? 48 : 80,
 	sound: true,

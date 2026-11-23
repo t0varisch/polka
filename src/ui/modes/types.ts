@@ -21,8 +21,6 @@ export interface ModeHost {
 	openSettings(): void;
 	goLibrary(): void;
 	updateTyping(t: BookRecord["typing"]): void;
-	/** Пересоздать текущий режим на текущем слове (смена раскладки «Страниц» в настройках). */
-	reopen(): void;
 }
 
 export interface ModeView {

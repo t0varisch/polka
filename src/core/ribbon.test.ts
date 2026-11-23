@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop, resolveFlow } from "./ribbon";
+import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop } from "./ribbon";
 
 /** Строки по 30 px: верх 0, 30, 60…; низ 30, 60, 90… */
 const lines = (n: number) => ({
@@ -63,18 +63,6 @@ describe("prevScreenTop", () => {
 	it("в окне нет ни одной строки: сдвиг на высоту экрана", () => {
 		// рисунок 100-900 выше экрана, строк с верхом в [top - height, top) нет
 		expect(prevScreenTop([0, 100, 900], 700, 200)).toBe(500);
-	});
-});
-
-describe("resolveFlow", () => {
-	it("авто: лента на грубом указателе, иначе страницы", () => {
-		expect(resolveFlow("auto", true)).toBe("ribbon");
-		expect(resolveFlow("auto", false)).toBe("pages");
-	});
-
-	it("явное значение не меняется", () => {
-		expect(resolveFlow("pages", true)).toBe("pages");
-		expect(resolveFlow("ribbon", false)).toBe("ribbon");
 	});
 });
 

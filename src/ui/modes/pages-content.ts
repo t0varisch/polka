@@ -1,14 +1,12 @@
 // Общий код режима «Страницы»: рендер куска, рисунки, подписи, подсветка цитат, выделение для закладки.
-// Им пользуются раскладка колонками (pages.ts) и лента: размеры колонки передаются при вызове.
+// Им пользуется лента (ribbon.ts); размеры колонки передаются при вызове.
 import type { Chunk } from "../../core/chunks";
 import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "../../core/figures";
 import { estimateChunkPages, PageNumbers, paraLines } from "../../core/pagecount";
 import { cleanQuote } from "../../core/quote";
-import { resolveFlow } from "../../core/ribbon";
 import type { FontKind } from "../../settings";
 import type { BookImage } from "../../types";
 import { formatDuration, h } from "../dom";
-import { segmented } from "../settings-sheet";
 import type { ModeHost } from "./types";
 
 /** Скорость для оценки «осталось». */
@@ -44,10 +42,6 @@ export function detectLang(paragraphs: string[]): "ru" | "en" {
 	return cyr * 2 > letters ? "ru" : "en";
 }
 
-/** Грубый указатель (палец): на нём «авто» выбирает ленту. */
-export function isCoarsePointer(): boolean {
-	return typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
-}
 
 /** «Уменьшить движение»: без анимации. */
 export function reducedMotion(): boolean {
@@ -61,23 +55,6 @@ export function footText(pageNo: number, pageTotal: number, word: number, totalW
 	return `стр. ${pageNo} из ${pageTotal} · ${pct.toFixed(pct < 10 ? 1 : 0)}% · осталось ≈ ${rest}`;
 }
 
-/** Строка настроек «Листание»; смена пересоздаёт режим. Показывает то, что открыто сейчас (авто уже разрешено). */
-export function flowRow(host: ModeHost): HTMLElement {
-	const s = host.settings;
-	return segmented<"pages" | "ribbon">(
-		"Листание",
-		resolveFlow(s.pageFlow, isCoarsePointer()),
-		[
-			["pages", "Страницами"],
-			["ribbon", "Лентой"],
-		],
-		(v) => {
-			s.pageFlow = v;
-			host.saveSettings();
-			host.reopen();
-		},
-	);
-}
 
 /** Средняя ширина знака шрифта страниц; без canvas (тесты, jsdom) — 0.5 кегля. */
 function avgCharWidth(host: ModeHost): number {
