@@ -1655,8 +1655,8 @@ const dupWords = (p) =>
 		return d;
 	});
 
-// Касание без ожидания конца съезда: точка вне рисунка
-async function slideTap(p, side) {
+// Точка касания справа или слева вне рисунка
+async function tapPoint(p, side) {
 	const m = await rbMetrics(p);
 	const x = m.x + m.w * (side === "right" ? 0.8 : 0.15);
 	const y = await p.evaluate(
@@ -1669,6 +1669,12 @@ async function slideTap(p, side) {
 		},
 		[x, m.y, m.H],
 	);
+	return [x, y];
+}
+
+// Касание без ожидания конца съезда
+async function slideTap(p, side) {
+	const [x, y] = await tapPoint(p, side);
 	await p.touchscreen.tap(x, y);
 }
 
@@ -1890,6 +1896,47 @@ async function slideFlow(W, H, tag) {
 				await page.evaluate(() => getSelection().removeAllRanges());
 				await page.waitForTimeout(200);
 			}
+
+			// касание с дрожью пальца: 10 px вбок — всё равно касание, ровно один экран вперёд
+			// Chromium не доносит до страницы сдвиги в пределах своего порога касания, а Safari доносит: события собираем сами (touchstart, touchmove, touchend, затем click, как шлёт Safari)
+			const jit = async (side, dx, dy) => {
+				const [x, y] = await tapPoint(page, side);
+				await page.evaluate(
+					async ([x, y, dx, dy]) => {
+						const win = document.querySelector(".rb-window");
+						const el = document.elementFromPoint(x, y) ?? win;
+						const tch = (px, py) => new Touch({ identifier: 7, target: el, clientX: px, clientY: py });
+						const fire = (type, list, ch) => el.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches: list, targetTouches: list, changedTouches: ch }));
+						const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+						el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: x, clientY: y, pointerType: "touch" }));
+						fire("touchstart", [tch(x, y)], [tch(x, y)]);
+						await sleep(40);
+						fire("touchmove", [tch(x + dx, y + dy)], [tch(x + dx, y + dy)]);
+						await sleep(120);
+						fire("touchend", [], [tch(x + dx, y + dy)]);
+						el.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: x, clientY: y }));
+					},
+					[x, y, dx, dy],
+				);
+				await page.waitForTimeout(700);
+				await rbSettle(page);
+			};
+			const j0 = await rbMetrics(page);
+			const nj = await rbNum(page);
+			await jit("right", -10, 0);
+			const j1 = await rbMetrics(page);
+			step(j1.topId !== undefined && j1.topId === j0.nextId && Math.abs(j1.topOff) <= 1.2 && (await rbNum(page)) === nj + 1, `${tag} ведение: касание с дрожью пальца на 10 px вбок — один экран вперёд`, `верх ${j1.topId}, ждали ${j0.nextId}, номер ${nj} -> ${await rbNum(page)}`);
+			// дрожь вниз на 7 px: касание листает вперёд и не стирает «назад — ровно прежний экран»
+			await page.keyboard.press("ArrowRight");
+			await rbSettle(page);
+			const j2 = await rbMetrics(page);
+			await jit("right", 0, 7);
+			const j3 = await rbMetrics(page);
+			await jit("left", 0, 0);
+			const j4 = await rbMetrics(page);
+			await jit("left", 0, 0);
+			const j5 = await rbMetrics(page);
+			step(j3.topId === j2.nextId && j4.topId === j2.topId && j5.topId === j1.topId && Math.abs(j5.topOff) <= 1.2, `${tag} ведение: дрожь вниз на 7 px листает, затем два назад — ровно прежние экраны`, `верх ${j2.topId} -> ${j3.topId} (ждали ${j2.nextId}) -> ${j4.topId} -> ${j5.topId} (ждали ${j1.topId})`);
 
 			// рывок: 38 px одним движением листает
 			const nf = await rbNum(page);

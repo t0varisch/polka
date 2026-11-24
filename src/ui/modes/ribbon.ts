@@ -50,9 +50,13 @@ const SCROLLING_MS = 120;
 const TOP_EPS = 1;
 /** Съезд экрана вбок, мс; тот же ход и кривая, что были у колонок. */
 const SLIDE_MS = 250;
+/** Запас таймера конца съезда сверх SLIDE_MS, мс. */
+const SLIDE_GUARD_MS = 250;
 const SLIDE_EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";
 /** Палец сдвинулся меньше этого — ведения нет; при ведении порог вычитается, экран не прыгает. */
 const DRAG_START_PX = 8;
+/** Жест, ушедший не дальше этого от точки касания, браузер всё ещё считает касанием и шлёт click (порог касания Chrome и Safari около 15 px): возвращённое ведение такого жеста click не гасит. */
+const TAP_SLOP_PX = 15;
 /** У края книги экран идёт во столько раз медленнее пальца. */
 const EDGE_RESIST = 3;
 
@@ -172,6 +176,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/** Место не обновляем: идёт ведение или возврат, окно временно стоит не на своём экране. */
 	let noPlace = false;
 	let vertical = false;
+	/** Наибольший уход пальца от точки касания за жест, px. */
+	let gestMax = 0;
 
 	/** Начала сеток кусков и края цепочки (от верха куска), раз вычисленные: переживают уборку куска из DOM; сбрасываются вместе с раскладкой. */
 	const chainMemo = new Map<number, { start: number | null; edge: number }>();
@@ -698,8 +704,13 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		slideEnd = onEnd ?? null;
 		syncSettled();
 		clearTimeout(slideTimer);
-		slideTimer = setTimeout(endSlide, SLIDE_MS + 40);
+		// конец — по transitionend окна; таймер запасной (перехода нет, если сдвиг не изменился, или главный поток завис)
+		slideTimer = setTimeout(endSlide, SLIDE_MS + SLIDE_GUARD_MS);
 	}
+
+	content.addEventListener("transitionend", (e) => {
+		if (sliding && e.target === content && e.propertyName === "transform") endSlide();
+	});
 
 	/** Съезд закончился (или его доводят сразу): копии нет, окно без сдвига. */
 	function endSlide(): void {
@@ -776,7 +787,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		if (disposed || viewer.isOpen() || loaded.length === 0 || dragging) return;
 		finishSlide();
 		stack = [];
-		fill(progTarget ?? win.scrollTop, progTarget === null);
+		// как в scrollToTarget: во время плавной прокрутки куски не убираем, уберёт onIdle
+		fill(progTarget ?? win.scrollTop, progTarget === null, loaded.length > MAX_CHUNKS + 2);
 		const base = progTarget ?? win.scrollTop;
 		const ix = index();
 		let t = dir === 1 ? nextLineTop(ix.tops, base) : prevLineTop(ix.tops, base);
@@ -953,9 +965,10 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/** Палец отпущен или отменён: экран доезжает на цель или возвращается; swipeDecision решает, как и раньше. */
 	function endDrag(dx: number, ms: number, cancel: boolean): void {
 		dragging = false;
-		swipedAt = performance.now();
 		const w = win.clientWidth;
 		const dir = cancel || pgSel.has() ? 0 : swipeDecision(dx, ms, w, SWIPE_PX);
+		// дрожь внутри порога касания: ведение вернулось, а click от браузера придёт и должен пролистать
+		if (cancel || dir !== 0 || gestMax > TAP_SLOP_PX) swipedAt = performance.now();
 		if (dir !== 0 && dir === dragSide && dragPlan && ghost) {
 			dragPlan.commit();
 			noPlace = false;
@@ -995,6 +1008,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			ty = e.touches[0].clientY;
 			t0 = performance.now();
 			vertical = false;
+			gestMax = 0;
 			// второй палец посреди ведения: экран возвращается; новое касание посреди съезда доводит его сразу
 			if (dragging) endDrag(0, 1, true);
 			else finishSlide();
@@ -1007,12 +1021,12 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			if (e.touches.length !== 1) return;
 			const dx = e.touches[0].clientX - tx;
 			const dy = e.touches[0].clientY - ty;
+			gestMax = Math.max(gestMax, Math.abs(dx), Math.abs(dy));
 			if (!dragging) {
-				// палец ведёт текст вверх-вниз: свои экраны больше не годятся
+				// палец ведёт текст вверх-вниз; стек экранов сбросит обработчик прокрутки, когда scrollTop реально уйдёт (дрожь на пару пикселей его не стирает)
 				if (Math.abs(dy) > 6 && Math.abs(dy) > Math.abs(dx)) {
 					vertical = true;
 					setProg(null);
-					stack = [];
 				} else if (!vertical && !multi && Math.abs(dx) > DRAG_START_PX && Math.abs(dx) > Math.abs(dy) && canDrag()) beginDrag();
 			}
 			if (dragging) dragMove(dx);
