@@ -1622,6 +1622,321 @@ async function ribbonImgFlow(W, H, tag) {
 	await ctx.close();
 }
 
+// ---- Съезд экрана вбок: копия уходящего экрана («призрак») и окно, что въезжает; ведение пальцем
+const slideInfo = (p) =>
+	p.evaluate(() => {
+		const g = document.querySelector(".rb-ghost");
+		const c = document.querySelector(".rb-content");
+		const tx = (el) => {
+			if (!el) return null;
+			const t = getComputedStyle(el).transform;
+			return t === "none" ? 0 : new DOMMatrix(t).m41;
+		};
+		return {
+			ghost: !!g,
+			ghosts: document.querySelectorAll(".rb-ghost").length,
+			gx: tx(g),
+			cx: tx(c),
+			ghostWords: g ? g.querySelectorAll("span[data-w]").length : 0,
+			settled: document.querySelector(".rb-window").dataset.settled,
+		};
+	});
+// Слов с одним номером на странице больше одного (ищет и в призраке)
+const dupWords = (p) =>
+	p.evaluate(() => {
+		const seen = new Set();
+		let d = 0;
+		for (const s of document.querySelectorAll("span[data-w]")) {
+			if (seen.has(s.dataset.w)) d++;
+			seen.add(s.dataset.w);
+		}
+		return d;
+	});
+
+// Касание без ожидания конца съезда: точка вне рисунка
+async function slideTap(p, side) {
+	const m = await rbMetrics(p);
+	const x = m.x + m.w * (side === "right" ? 0.8 : 0.15);
+	const y = await p.evaluate(
+		([x, y0, h]) => {
+			for (const k of [0.5, 0.15, 0.85, 0.3, 0.7, 0.05, 0.95]) {
+				const el = document.elementFromPoint(x, y0 + h * k);
+				if (el && !el.closest("img.pg-img")) return y0 + h * k;
+			}
+			return y0 + h / 2;
+		},
+		[x, m.y, m.H],
+	);
+	await p.touchscreen.tap(x, y);
+}
+
+async function slideFlow(W, H, tag) {
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
+	const page = await ctx.newPage();
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} съезд: ошибка страницы`, e.message));
+	page.on("console", (m) => m.type() === "error" && step(false, `${tag} съезд: ошибка в консоли`, m.text()));
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await openRibbon(page);
+		const m0 = await rbMetrics(page);
+		const cw = await page.evaluate(() => document.querySelector(".rb-window").clientWidth);
+		const tapAt = (side) => slideTap(page, side);
+		// у начала книги (окно только открыто): листания нет, у пальца сопротивление втрое
+		const wStart = await dw(page);
+		await tapAt("left");
+		await page.waitForTimeout(90);
+		step(!(await slideInfo(page)).ghost && (await rbScroll(page)) === 0, `${tag} съезд: касание слева в начале книги — копии нет, место прежнее`, JSON.stringify(await slideInfo(page)));
+		await rbSettle(page);
+		if (BROWSER === "chromium") {
+			const cdp = await ctx.newCDPSession(page);
+			const y0 = Math.round(m0.y + m0.H / 2);
+			const x0 = Math.round(m0.x + m0.w / 2);
+			await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: x0, y: y0 }] });
+			for (let i = 1; i <= 4; i++) {
+				await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x0 + i * 17, y: y0 }] });
+				await page.waitForTimeout(20);
+			}
+			await page.waitForTimeout(60);
+			const ed = await slideInfo(page);
+			// палец ушёл на 68, сдвиг (68 - 8) / 3 = 20
+			step(!ed.ghost && Math.abs(ed.cx - 20) <= 1.5, `${tag} ведение: у начала книги экран идёт втрое медленнее пальца и копии нет`, JSON.stringify(ed));
+			await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+			await rbSettle(page);
+			const ed2 = await slideInfo(page);
+			step(ed2.cx === 0 && (await rbScroll(page)) === 0 && (await dw(page)) === wStart, `${tag} ведение: у начала книги отпустил — на месте, листания нет`, JSON.stringify(ed2));
+		}
+		await page.evaluate((h) => document.querySelector(".rb-window").scrollBy(0, h * 1.5), m0.H);
+		await rbSettle(page);
+
+		// касание справа: через ~90 мс копия уезжает влево, через 400 мс её нет, верх — ожидаемый экран
+		const a = await rbMetrics(page);
+		const na = await rbNum(page);
+		const wa = await dw(page);
+		await tapAt("right");
+		await page.waitForTimeout(90);
+		const mid = await slideInfo(page);
+		await page.screenshot({ path: `${OUT}/${tag}-slide-mid.png` });
+		step(mid.ghost && mid.gx < -2 && mid.gx > -cw && mid.cx > 0 && mid.settled === "0", `${tag} съезд: через 90 мс копия уезжает влево, окно въезжает справа`, JSON.stringify(mid));
+		step(mid.ghostWords === 0 && (await dupWords(page)) === 0, `${tag} съезд: в копии нет span[data-w], слов с одним номером нет`, `в копии ${mid.ghostWords}, повторов ${await dupWords(page)}`);
+		// номер у начала книги может шагнуть на 2 (ячейка сетки у рисунка), как и при мгновенном листании: важно, что он уже конечный
+		const nMid = await rbNum(page);
+		step((await dw(page)) > wa && nMid > na && nMid <= na + 2, `${tag} съезд: место и номер страницы по новому экрану сразу`, `слово ${wa} -> ${await dw(page)}, номер ${na} -> ${nMid}`);
+		await page.waitForTimeout(310);
+		const after = await slideInfo(page);
+		const b = await rbMetrics(page);
+		step(!after.ghost && after.cx === 0 && after.settled === "1" && (await rbNum(page)) === nMid, `${tag} съезд: через 400 мс копии нет, окно на месте, номер не менялся`, JSON.stringify(after));
+		step(Math.abs(b.st - a.nextTop) <= 1.2 && Math.abs(b.topOff) <= 1.2 && (await onOpenPage(page)), `${tag} съезд: верх — ожидаемый экран, верхняя строка вровень с краем`, `${a.st} -> ${b.st}, ждали ${a.nextTop}, отступ ${b.topOff}`);
+		step((await dupWords(page)) === 0, `${tag} съезд: после съезда span[data-w] не дублируются`);
+
+		// три касания по 50 мс — ровно три экрана (те же, что при трёх касаниях с ожиданием); три обратно — исходный
+		const n1 = await rbNum(page);
+		const t1 = (await rbMetrics(page)).topId;
+		for (let i = 0; i < 3; i++) {
+			await tapAt("right");
+			await rbSettle(page);
+		}
+		const tSlow = (await rbMetrics(page)).topId;
+		const nSlow = await rbNum(page);
+		for (let i = 0; i < 3; i++) {
+			await tapAt("left");
+			await rbSettle(page);
+		}
+		step((await rbMetrics(page)).topId === t1 && (await rbNum(page)) === n1, `${tag} съезд: три касания по одному вперёд и назад — на исходный экран`, `${t1} -> ${tSlow} -> ${(await rbMetrics(page)).topId}`);
+		for (let i = 0; i < 3; i++) {
+			await tapAt("right");
+			await page.waitForTimeout(50);
+		}
+		await rbSettle(page);
+		step(tSlow !== t1 && (await rbMetrics(page)).topId === tSlow && (await rbNum(page)) === nSlow && (await onOpenPage(page)) && Math.abs((await rbMetrics(page)).topOff) <= 1.2, `${tag} съезд: три касания по 50 мс — ровно три экрана`, `верх ${(await rbMetrics(page)).topId}, ждали ${tSlow}, номер ${n1} -> ${await rbNum(page)}, ждали ${nSlow}`);
+		for (let i = 0; i < 3; i++) {
+			await tapAt("left");
+			await page.waitForTimeout(50);
+		}
+		await rbSettle(page);
+		step((await rbMetrics(page)).topId === t1 && (await rbNum(page)) === n1, `${tag} съезд: три касания слева по 50 мс — на исходный экран`, `${t1} ждали, ${(await rbMetrics(page)).topId}`);
+
+		// клавиша: тот же съезд (вправо — копия влево; назад — копия вправо)
+		await page.keyboard.press("ArrowRight");
+		await page.waitForTimeout(90);
+		const k1 = await slideInfo(page);
+		await page.waitForTimeout(310);
+		await page.keyboard.press("ArrowLeft");
+		await page.waitForTimeout(90);
+		const k2 = await slideInfo(page);
+		await rbSettle(page);
+		step(k1.ghost && k1.gx < -2 && k2.ghost && k2.gx > 2 && (await rbMetrics(page)).topId === t1, `${tag} съезд: → копия влево, ← копия вправо, назад на исходный экран`, `${k1.gx?.toFixed(0)} / ${k2.gx?.toFixed(0)}`);
+
+		// по строке — без съезда
+		await page.keyboard.press("ArrowDown");
+		await page.waitForTimeout(60);
+		step(!(await slideInfo(page)).ghost, `${tag} съезд: стрелка вниз на строку — копии нет`);
+		await rbSettle(page);
+		await page.keyboard.press("ArrowUp");
+		await rbSettle(page);
+
+		if (BROWSER === "chromium") {
+			const cdp = await ctx.newCDPSession(page);
+			const down = async (x, y) => cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+			const move = async (x, y) => cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] });
+			const up = async () => cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+			const y0 = Math.round(m0.y + m0.H / 2);
+			const x0 = Math.round(m0.x + m0.w / 2);
+			const s0 = await rbMetrics(page);
+			const ns = await rbNum(page);
+			const ws = await dw(page);
+
+			// ведение 30 px: экран идёт за пальцем (сдвиг за вычетом порога 8), справа уже виден следующий, отпустил — вернулся, место прежнее
+			await down(x0, y0);
+			for (let i = 1; i <= 4; i++) {
+				await move(x0 - Math.round((38 * i) / 4), y0);
+				await page.waitForTimeout(20);
+			}
+			await page.waitForTimeout(80);
+			const d1 = await slideInfo(page);
+			step(d1.ghost && Math.abs(d1.gx + 30) <= 1.5 && Math.abs(d1.cx - (cw - 30)) <= 1.5 && (await dw(page)) === ws && (await rbNum(page)) === ns, `${tag} ведение: 30 px — копия на -30, окно на ширину правее, место и номер прежние`, JSON.stringify(d1));
+			await up();
+			await rbSettle(page);
+			const d2 = await slideInfo(page);
+			const e1 = await rbMetrics(page);
+			step(!d2.ghost && d2.cx === 0 && e1.topId === s0.topId && Math.abs(e1.st - s0.st) <= 1.2 && (await dw(page)) === ws && (await rbNum(page)) === ns, `${tag} ведение: 30 px — вернулся, прокрутка, место и номер прежние`, `${s0.st} -> ${e1.st}, слово ${ws} -> ${await dw(page)}`);
+
+			// 120 px: экран вперёд; назад 120 — на прежний
+			await down(x0, y0);
+			for (let i = 1; i <= 6; i++) {
+				await move(x0 - Math.round((128 * i) / 6), y0);
+				await page.waitForTimeout(20);
+			}
+			await page.waitForTimeout(60);
+			const d3 = await slideInfo(page);
+			await up();
+			await rbSettle(page);
+			const e2 = await rbMetrics(page);
+			step(d3.ghost && Math.abs(d3.gx + 120) <= 1.5 && e2.topId === s0.nextId && Math.abs(e2.topOff) <= 1.2 && (await rbNum(page)) === ns + 1 && (await onOpenPage(page)), `${tag} ведение: 120 px — копия на -120, после отпускания экран вперёд, номер +1`, `gx ${d3.gx?.toFixed(1)}, верх ${e2.topId} ждали ${s0.nextId}, номер ${await rbNum(page)}`);
+			await down(x0, y0);
+			for (let i = 1; i <= 6; i++) {
+				await move(x0 + Math.round((128 * i) / 6), y0);
+				await page.waitForTimeout(20);
+			}
+			await up();
+			await rbSettle(page);
+			const e3 = await rbMetrics(page);
+			step(e3.topId === s0.topId && Math.abs(e3.st - s0.st) <= 1.2 && (await rbNum(page)) === ns && (await dw(page)) === ws, `${tag} ведение: вправо 120 px — назад на прежний экран точно`, `${s0.st} -> ${e3.st}`);
+
+			// смена направления посреди жеста: сначала влево, потом вправо за точку касания — цель назад
+			await down(x0, y0);
+			for (let i = 1; i <= 3; i++) {
+				await move(x0 - i * 20, y0);
+				await page.waitForTimeout(20);
+			}
+			for (let i = 1; i <= 6; i++) {
+				await move(x0 - 60 + i * 22, y0);
+				await page.waitForTimeout(20);
+			}
+			await page.waitForTimeout(60);
+			const d4 = await slideInfo(page);
+			// палец ушёл на +72: сдвиг 72 - 8 = 64, прежний экран виден слева
+			step(d4.ghost && Math.abs(d4.gx - 64) <= 1.5 && Math.abs(d4.cx - (64 - cw)) <= 1.5, `${tag} ведение: смена направления — теперь виден прежний экран слева`, JSON.stringify(d4));
+			await up();
+			await rbSettle(page);
+			step((await rbNum(page)) === ns - 1 && (await onOpenPage(page)) && !(await slideInfo(page)).ghost, `${tag} ведение: смена направления, отпустил — экран назад`, `номер ${ns} -> ${await rbNum(page)}`);
+			await page.keyboard.press("ArrowRight");
+			await rbSettle(page);
+
+			// вертикальный жест — обычная прокрутка, съезда нет
+			const sv = await rbScroll(page);
+			await down(x0, y0);
+			let ghostSeen = false;
+			for (let i = 1; i <= 6; i++) {
+				await move(x0, y0 - i * 15);
+				await page.waitForTimeout(20);
+				ghostSeen = ghostSeen || (await slideInfo(page)).ghost;
+			}
+			await up();
+			await page.waitForTimeout(300);
+			step(!ghostSeen && (await rbScroll(page)) - sv > 30, `${tag} ведение: вертикальный жест — прокрутка, копии нет`, `${sv} -> ${await rbScroll(page)}`);
+			await rbSettle(page);
+			await page.keyboard.press("ArrowRight");
+			await rbSettle(page);
+
+			// выделение в тексте: свайп не листает и не двигает экран
+			const q = (await rbMetrics(page)).top?.word;
+			if (q !== undefined) {
+				await page.evaluate((a) => {
+					const r = document.createRange();
+					r.setStartBefore(document.querySelector(`.rb-window span[data-w="${a}"]`));
+					r.setEndAfter(document.querySelector(`.rb-window span[data-w="${a + 3}"]`));
+					const sel = getSelection();
+					sel.removeAllRanges();
+					sel.addRange(r);
+				}, q);
+				await page.waitForTimeout(200);
+				const nSel = await rbNum(page);
+				await down(x0, y0);
+				let g2 = false;
+				for (let i = 1; i <= 6; i++) {
+					await move(x0 - i * 22, y0);
+					await page.waitForTimeout(20);
+					g2 = g2 || (await slideInfo(page)).ghost;
+				}
+				await up();
+				await rbSettle(page);
+				step(!g2 && (await rbNum(page)) === nSel, `${tag} ведение: при выделении в тексте свайп не листает`, `номер ${nSel} -> ${await rbNum(page)}`);
+				await page.evaluate(() => getSelection().removeAllRanges());
+				await page.waitForTimeout(200);
+			}
+
+			// рывок: 38 px одним движением листает
+			const nf = await rbNum(page);
+			await down(x0, y0);
+			await move(x0 - 38, y0);
+			await up();
+			await rbSettle(page);
+			step((await rbNum(page)) === nf + 1 && (await onOpenPage(page)), `${tag} ведение: быстрый рывок на 38 px — экран вперёд`, `${nf} -> ${await rbNum(page)}`);
+		}
+
+		step(!(await hscroll(page)), `${tag} съезд: нет горизонтальной прокрутки`);
+	} catch (e) {
+		step(false, `${tag} съезд: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-slide-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+
+	// «уменьшить движение»: ни съезда, ни ведения
+	const rctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true, reducedMotion: "reduce" });
+	const rp = await rctx.newPage();
+	try {
+		await rp.goto(base);
+		await rp.waitForSelector(".library .actions");
+		await rp.setInputFiles('input[type="file"]', BOOK);
+		await rp.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await openRibbon(rp);
+		await rp.evaluate((h) => document.querySelector(".rb-window").scrollBy(0, h * 1.5), (await rbMetrics(rp)).H);
+		await rbSettle(rp);
+		const r0 = await rbMetrics(rp);
+		await slideTap(rp, "right");
+		await rp.waitForTimeout(40);
+		const ri = await slideInfo(rp);
+		step(!ri.ghost && ri.cx === 0 && Math.abs((await rbScroll(rp)) - r0.nextTop) <= 1.2, `${tag} съезд: «уменьшить движение» — касание сразу, без копии`, JSON.stringify(ri));
+		if (BROWSER === "chromium") {
+			const c = await rctx.newCDPSession(rp);
+			const y = Math.round(H / 2);
+			const x = Math.round(W / 2);
+			await c.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+			await c.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x - 60, y }] });
+			await rp.waitForTimeout(60);
+			const mid2 = await slideInfo(rp);
+			await c.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+			step(!mid2.ghost && mid2.cx === 0, `${tag} съезд: «уменьшить движение» — экран не идёт за пальцем`, JSON.stringify(mid2));
+		}
+	} catch (e) {
+		step(false, `${tag} съезд reduced: сценарий оборвался`, String(e.message).split("\n")[0]);
+	}
+	await rctx.close();
+}
+
 console.log(`# ${BROWSER}, книга ${basename(BOOK)}, ${base}, снимки в ${OUT}`);
 for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
@@ -1630,6 +1945,7 @@ for (const [W, H] of SIZES) {
 		await pageNumberFlow(W, H, tag);
 		await markFlow(W, H, tag);
 		await (IMG ? ribbonImgFlow : ribbonFlow)(W, H, tag);
+		await slideFlow(W, H, tag);
 		continue;
 	}
 	await (IMG ? imgFlow : browserFlow)(W, H, tag);
@@ -1639,6 +1955,7 @@ for (const [W, H] of SIZES) {
 	if (!IMG) await screenFlow(W, H, tag);
 	await markFlow(W, H, tag);
 	await (IMG ? ribbonImgFlow : ribbonFlow)(W, H, tag);
+	await slideFlow(W, H, tag);
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }

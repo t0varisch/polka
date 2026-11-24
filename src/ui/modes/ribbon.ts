@@ -48,6 +48,22 @@ const MAX_AHEAD = 3;
 const SCROLLING_MS = 120;
 /** Строка с верхом выше края окна не больше чем на это считается видимой целиком, px. */
 const TOP_EPS = 1;
+/** Съезд экрана вбок, мс; тот же ход и кривая, что были у колонок. */
+const SLIDE_MS = 250;
+const SLIDE_EASE = "cubic-bezier(0.22, 0.61, 0.36, 1)";
+/** Палец сдвинулся меньше этого — ведения нет; при ведении порог вычитается, экран не прыгает. */
+const DRAG_START_PX = 8;
+/** У края книги экран идёт во столько раз медленнее пальца. */
+const EDGE_RESIST = 3;
+
+/** Цель листания: верх экрана как кусок и отступ от его верха; commit — запись в стек экранов. */
+interface TurnPlan {
+	dir: 1 | -1;
+	tgt: { i: number; off: number };
+	commit: () => void;
+}
+
+const shiftX = (x: number): string => `translateX(${x}px)`;
 
 /** Строка текста или рисунок: верх и низ от верха куска и слово (у рисунка — первое слово после него). */
 interface Line {
@@ -136,6 +152,26 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	let stack: { i: number; off: number }[] = [];
 	let lastScrollAt = -1e9;
 	let swipedAt = -1e9;
+	/** scrollTop, что выставили мы сами: такая прокрутка не считается пальцем (касание следом листает, а не останавливает её). */
+	let ownTop: number | null = null;
+	/** Съезд экрана: на окне лежит копия уходящего экрана («призрак»), окно под ней уже прокручено на новый. */
+	let ghost: HTMLElement | null = null;
+	let sliding = false;
+	let slideTimer: ReturnType<typeof setTimeout> | undefined;
+	let slideEnd: (() => void) | null = null;
+	/** Палец ведёт экран. */
+	let dragging = false;
+	/** Сторона ведения: 1 — вперёд (палец влево), -1 — назад, 0 — ещё не определена. */
+	let dragSide: 0 | 1 | -1 = 0;
+	let dragPlan: TurnPlan | null = null;
+	/** Сдвиг уходящего экрана от пальца, px. */
+	let dragX = 0;
+	/** scrollTop экрана, с которого взяли палец (сдвигается вместе с кусками); окно прокручено на цель, пока dragShown. */
+	let dragOrigTop = 0;
+	let dragShown = false;
+	/** Место не обновляем: идёт ведение или возврат, окно временно стоит не на своём экране. */
+	let noPlace = false;
+	let vertical = false;
 
 	/** Начала сеток кусков и края цепочки (от верха куска), раз вычисленные: переживают уборку куска из DOM; сбрасываются вместе с раскладкой. */
 	const chainMemo = new Map<number, { start: number | null; edge: number }>();
@@ -273,6 +309,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		placeTop += delta;
 		settledTop += delta;
 		fillTop += delta;
+		dragOrigTop += delta;
 	}
 
 	/** Верх элемента от верха содержимого: не зависит от прокрутки. */
@@ -282,6 +319,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 
 	function setScrollTop(v: number): void {
 		win.scrollTop = Math.max(0, v);
+		ownTop = win.scrollTop;
 	}
 
 	/** Дописывает кусок i в конец или в начало; в начале прокрутка поправляется на высоту добавленного. Возвращает эту поправку. */
@@ -390,7 +428,12 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/** Ставит или снимает цель своей плавной прокрутки; окно сообщает, закончила ли она (для проверок). */
 	function setProg(v: number | null): void {
 		progTarget = v;
-		win.dataset.settled = v === null ? "1" : "0";
+		syncSettled();
+	}
+
+	/** Окно сообщает «стою» (data-settled), когда нет ни плавной прокрутки, ни съезда, ни ведения. */
+	function syncSettled(): void {
+		win.dataset.settled = progTarget === null && !sliding && !dragging ? "1" : "0";
 	}
 
 	// ---- место, подвал
@@ -416,6 +459,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 
 	/** Место — первое слово верхней строки, видимой целиком; сообщается оболочке. */
 	function updatePlace(): void {
+		if (noPlace) return;
 		const st = win.scrollTop;
 		if (Math.abs(st - placeTop) < 1) return;
 		const ix = index();
@@ -431,7 +475,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		if (placeFrame) return;
 		const run = () => {
 			placeFrame = 0;
-			if (disposed || loaded.length === 0) return;
+			if (disposed || loaded.length === 0 || sliding || dragging) return;
 			// дописываем, когда прокрутка ушла от прежнего места хотя бы на четверть экрана: у коротких глав иначе дописывание и уборка гоняли бы друг друга
 			if (Math.abs(win.scrollTop - fillTop) >= H / 4) {
 				fillTop = win.scrollTop;
@@ -456,6 +500,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/** Открывает слово w: строка слова — верхняя. Куски вокруг дописываются. */
 	function openAt(w: number, flash: boolean): void {
 		if (chunks.length === 0) return;
+		abortSlide();
 		w = Math.max(0, Math.min(w, total - 1));
 		const ci = chunkOfWord(chunks, w);
 		if (!loaded.some((l) => l.i === ci)) {
@@ -491,6 +536,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		if (disposed) return;
 		const seq = ++layoutSeq;
 		if (!applyGeometry()) return;
+		abortSlide();
 		clearLoaded();
 		chainMemo.clear();
 		pageNums = estimateBookPages(host, chunks, tocSet, pc, geo());
@@ -529,37 +575,168 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 
 	/** Экран вперёд или назад. Идущая плавная прокрутка продолжается от её цели. */
 	function turn(dir: 1 | -1): void {
-		if (disposed || viewer.isOpen() || loaded.length === 0) return;
+		if (disposed || viewer.isOpen() || loaded.length === 0 || dragging) return;
+		// новое листание не ждёт конца съезда: прежний доводится мгновенно, новый начинается от него
+		finishSlide();
 		// цель не убегает дальше трёх экранов от прокрутки: зажатая клавиша иначе копила бы куски между ними
 		if (progTarget !== null && Math.abs(progTarget - win.scrollTop) > MAX_AHEAD * H) return;
 		// выделение осталось бы на ушедшем экране: закладка взяла бы цитату, которой уже не видно
 		pgSel.clear();
 		window.getSelection()?.removeAllRanges();
-		fill(progTarget ?? win.scrollTop, progTarget === null);
-		let base = progTarget ?? win.scrollTop;
+		const p = planTurn(dir, () => progTarget ?? win.scrollTop, true);
+		if (!p) return;
+		p.commit();
+		goTo(p, dir);
+	}
+
+	/**
+	 * Куда ведёт листание из экрана с верхом base() (функция: дописывание кусков сверху сдвигает координаты). null — дальше некуда.
+	 * Ничего не прокручивает; стек экранов меняет только commit.
+	 */
+	function planTurn(dir: 1 | -1, base: () => number, doTrim: boolean): TurnPlan | null {
+		fill(base(), true, doTrim);
+		let b = base();
 		let t: number;
 		let back = false;
 		if (dir === 1) {
 			const ix = index();
-			t = nextScreenTop(ix.tops, ix.bottoms, base, H);
+			t = nextScreenTop(ix.tops, ix.bottoms, b, H);
 		} else {
 			const last = stack[stack.length - 1];
 			// экран, с которого листали, мог лежать в куске, убранном сверху: дописываем его обратно
 			while (last !== undefined && loaded[0].i > last.i) mount(loaded[0].i - 1, "start");
 			// дописывание сверху сдвинуло прокрутку и цель: base считаем заново
-			base = progTarget ?? win.scrollTop;
+			b = base();
 			const at = last === undefined ? undefined : stackTop(last);
-			if (at !== undefined && at < base - 0.5) {
+			if (at !== undefined && at < b - 0.5) {
 				back = true;
 				t = at;
-			} else t = prevScreenTop(index().tops, base, H);
+			} else t = prevScreenTop(index().tops, b, H);
 		}
 		// дальше конца окна не прокрутить
 		t = Math.max(0, Math.min(t, content.offsetHeight - H));
-		if (dir === 1 ? t <= base + 0.5 : t >= base - 0.5) return;
-		if (dir === 1) stack.push(stackEntry(base));
-		else if (back) stack.pop();
-		scrollToTarget(t);
+		if (dir === 1 ? t <= b + 0.5 : t >= b - 0.5) return null;
+		const from = dir === 1 ? stackEntry(b) : null;
+		return {
+			dir,
+			tgt: stackEntry(t),
+			commit() {
+				if (from) stack.push(from);
+				else if (back) stack.pop();
+			},
+		};
+	}
+
+	/** Верх экрана цели в координатах содержимого; кусок цели дописывается, если его убрали. */
+	function targetTop(tgt: { i: number; off: number }): number {
+		while (loaded[0].i > tgt.i) mount(loaded[0].i - 1, "start");
+		while (loaded[loaded.length - 1].i < tgt.i) mount(loaded[loaded.length - 1].i + 1, "end");
+		return stackTop(tgt) ?? win.scrollTop;
+	}
+
+	/** Листание: окно сразу встаёт на новый экран, место и номер — по нему; уходящий экран съезжает копией. */
+	function goTo(p: TurnPlan, dir: 1 | -1): void {
+		let t = targetTop(p.tgt);
+		t += fill(t, true, true);
+		const slide = !reducedMotion() && win.clientWidth > 0;
+		ghost = slide ? makeGhost() : null;
+		setProg(null);
+		setScrollTop(t);
+		settledTop = win.scrollTop;
+		fillTop = win.scrollTop;
+		updatePlace();
+		clearTimeout(idleTimer);
+		idleTimer = setTimeout(() => onIdle(), IDLE_MS);
+		if (!ghost) return;
+		const w = win.clientWidth;
+		runSlide(0, -dir * w, dir * w, 0);
+	}
+
+	/** Копия видимой части окна без span[data-w]: слова остаются в одном экземпляре — поиск, выделение и подсветка работают по живому тексту. */
+	function makeGhost(): HTMLElement | null {
+		index();
+		const st = win.scrollTop;
+		const vis = loaded.filter((l) => l.top < st + H && l.top + l.height > st);
+		if (vis.length === 0) return null;
+		const inner = h("div.rb-content", { lang });
+		inner.style.lineHeight = content.style.lineHeight;
+		inner.style.width = content.style.width;
+		inner.style.top = `${vis[0].top - st}px`;
+		for (const l of vis) {
+			const c = l.section.cloneNode(true) as HTMLElement;
+			c.removeAttribute("data-i");
+			for (const el of c.querySelectorAll("[data-w]")) el.removeAttribute("data-w");
+			for (const el of c.querySelectorAll("[data-i]")) el.removeAttribute("data-i");
+			inner.append(c);
+		}
+		const g = h("div.rb-ghost", { "aria-hidden": "true" }, inner);
+		g.style.left = `${win.offsetLeft}px`;
+		g.style.top = `${win.offsetTop}px`;
+		g.style.width = `${win.clientWidth}px`;
+		g.style.height = `${win.clientHeight}px`;
+		view.append(g);
+		return g;
+	}
+
+	/** Едет за SLIDE_MS: копия от gx к gTo, окно от cx к cTo. onEnd — по окончании (и при мгновенном завершении). */
+	function runSlide(gx: number, gTo: number, cx: number, cTo: number, onEnd?: () => void): void {
+		const tr = `transform ${SLIDE_MS}ms ${SLIDE_EASE}`;
+		if (ghost) {
+			ghost.style.transition = "none";
+			ghost.style.transform = shiftX(gx);
+		}
+		content.style.transition = "none";
+		content.style.transform = shiftX(cx);
+		void content.offsetWidth; // начало без перехода, дальше с ним
+		if (ghost) {
+			ghost.style.transition = tr;
+			ghost.style.transform = shiftX(gTo);
+		}
+		content.style.transition = tr;
+		content.style.transform = shiftX(cTo);
+		sliding = true;
+		slideEnd = onEnd ?? null;
+		syncSettled();
+		clearTimeout(slideTimer);
+		slideTimer = setTimeout(endSlide, SLIDE_MS + 40);
+	}
+
+	/** Съезд закончился (или его доводят сразу): копии нет, окно без сдвига. */
+	function endSlide(): void {
+		clearTimeout(slideTimer);
+		const fn = slideEnd;
+		slideEnd = null;
+		ghost?.remove();
+		ghost = null;
+		content.style.transition = "";
+		content.style.transform = "";
+		win.scrollLeft = 0;
+		sliding = false;
+		fn?.();
+		syncSettled();
+		settledTop = win.scrollTop;
+		clearTimeout(idleTimer);
+		idleTimer = setTimeout(() => onIdle(), IDLE_MS);
+	}
+
+	function finishSlide(): void {
+		if (sliding) endSlide();
+	}
+
+	/** Бросает съезд и ведение, ничего не возвращая: раскладка или место меняются целиком. */
+	function abortSlide(): void {
+		clearTimeout(slideTimer);
+		slideEnd = null;
+		ghost?.remove();
+		ghost = null;
+		content.style.transition = "";
+		content.style.transform = "";
+		sliding = false;
+		dragging = false;
+		dragPlan = null;
+		dragShown = false;
+		noPlace = false;
+		syncSettled();
 	}
 
 	/** Верх экрана t как кусок и отступ от его верха. */
@@ -596,7 +773,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 
 	/** Колесо мыши: одна засечка — одна строка. Считается от цели идущей прокрутки, чтобы N засечек давали N строк. */
 	function wheelLine(dir: 1 | -1): void {
-		if (disposed || viewer.isOpen() || loaded.length === 0) return;
+		if (disposed || viewer.isOpen() || loaded.length === 0 || dragging) return;
+		finishSlide();
 		stack = [];
 		fill(progTarget ?? win.scrollTop, progTarget === null);
 		const base = progTarget ?? win.scrollTop;
@@ -610,6 +788,12 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/** force — сторож сработал второй раз: цель, до которой прокрутка так и не доехала, больше не ждём. */
 	function onIdle(force = false): void {
 		if (disposed) return;
+		// съезд или ведение: куски не трогаем, уберём, когда экран встанет
+		if (sliding || dragging) {
+			clearTimeout(idleTimer);
+			idleTimer = setTimeout(() => onIdle(), IDLE_MS);
+			return;
+		}
 		// плавная прокрутка WebKit может молчать дольше паузы: пока она не доехала, цель не сбрасываем и куски не убираем
 		if (!force && progTarget !== null && Math.abs(win.scrollTop - progTarget) >= 1) {
 			clearTimeout(idleTimer);
@@ -628,7 +812,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	win.addEventListener(
 		"scroll",
 		() => {
-			lastScrollAt = performance.now();
+			// прокрутку, что выставили мы сами, пальцем не считаем: касание следом должно листать
+			if (ownTop === null || Math.abs(win.scrollTop - ownTop) > 1.01) lastScrollAt = performance.now();
 			if (progTarget === null) {
 				// прокрутка не наша (палец, колесо, клавиши браузера): прежние экраны уже не те
 				if (Math.abs(win.scrollTop - settledTop) > 1) stack = [];
@@ -698,6 +883,108 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	let tx = 0;
 	let ty = 0;
 	let t0 = 0;
+
+	/** Сдвиг экрана от пальца: до порога нуль, дальше разница. */
+	const effShift = (dx: number): number => (Math.abs(dx) <= DRAG_START_PX ? 0 : dx - Math.sign(dx) * DRAG_START_PX);
+
+	function canDrag(): boolean {
+		return !disposed && !viewer.isOpen() && loaded.length > 0 && !reducedMotion() && !pgSel.has() && win.clientWidth > 0;
+	}
+
+	/** Палец пошёл вбок: съезд, что был, доводим сразу; окно остаётся на своём экране, пока не ясна сторона. */
+	function beginDrag(): void {
+		finishSlide();
+		setProg(null);
+		dragging = true;
+		noPlace = true;
+		dragSide = 0;
+		dragPlan = null;
+		dragShown = false;
+		dragX = 0;
+		dragOrigTop = win.scrollTop;
+		content.style.transition = "none";
+		syncSettled();
+	}
+
+	/** Сторона ведения выбрана или сменилась: окно встаёт на цель этой стороны, под копией прежнего экрана. */
+	function setDragSide(side: 1 | -1): void {
+		dragSide = side;
+		if (dragShown) {
+			setScrollTop(dragOrigTop);
+			settledTop = win.scrollTop;
+			dragShown = false;
+		}
+		dragPlan = planTurn(side, () => dragOrigTop, false);
+		if (!dragPlan) {
+			// у края книги листать некуда: копии нет, двигается само окно
+			ghost?.remove();
+			ghost = null;
+			return;
+		}
+		if (!ghost) ghost = makeGhost();
+		if (!ghost) {
+			dragPlan = null;
+			return;
+		}
+		let t = targetTop(dragPlan.tgt);
+		t += fill(t, true, false);
+		setScrollTop(t);
+		settledTop = win.scrollTop;
+		fillTop = win.scrollTop;
+		dragShown = true;
+	}
+
+	function dragMove(dx: number): void {
+		const eff = effShift(dx);
+		const side = eff < 0 ? 1 : eff > 0 ? -1 : dragSide;
+		if (side !== 0 && side !== dragSide) setDragSide(side);
+		if (dragSide === 0) return;
+		if (dragPlan && ghost) {
+			dragX = eff;
+			ghost.style.transform = shiftX(eff);
+			content.style.transform = shiftX(eff + dragSide * win.clientWidth);
+		} else {
+			dragX = eff / EDGE_RESIST;
+			content.style.transform = shiftX(dragX);
+		}
+	}
+
+	/** Палец отпущен или отменён: экран доезжает на цель или возвращается; swipeDecision решает, как и раньше. */
+	function endDrag(dx: number, ms: number, cancel: boolean): void {
+		dragging = false;
+		swipedAt = performance.now();
+		const w = win.clientWidth;
+		const dir = cancel || pgSel.has() ? 0 : swipeDecision(dx, ms, w, SWIPE_PX);
+		if (dir !== 0 && dir === dragSide && dragPlan && ghost) {
+			dragPlan.commit();
+			noPlace = false;
+			dragShown = false;
+			updatePlace();
+			runSlide(dragX, -dir * w, dragX + dir * w, 0);
+			return;
+		}
+		const restore = () => {
+			if (dragShown) {
+				setScrollTop(dragOrigTop);
+				settledTop = win.scrollTop;
+				fillTop = win.scrollTop;
+			}
+			dragShown = false;
+			dragPlan = null;
+			noPlace = false;
+		};
+		if (dragSide !== 0 && ghost) runSlide(dragX, 0, dragX + dragSide * w, dragSide * w, restore);
+		else if (dragSide !== 0 && dragX !== 0) runSlide(0, 0, dragX, 0, restore);
+		else {
+			ghost?.remove();
+			ghost = null;
+			content.style.transition = "";
+			content.style.transform = "";
+			restore();
+			syncSettled();
+		}
+	}
+
 	win.addEventListener(
 		"touchstart",
 		(e) => {
@@ -705,6 +992,10 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			tx = e.touches[0].clientX;
 			ty = e.touches[0].clientY;
 			t0 = performance.now();
+			vertical = false;
+			// второй палец посреди ведения: экран возвращается; новое касание посреди съезда доводит его сразу
+			if (dragging) endDrag(0, 1, true);
+			else finishSlide();
 		},
 		{ passive: true },
 	);
@@ -714,11 +1005,15 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			if (e.touches.length !== 1) return;
 			const dx = e.touches[0].clientX - tx;
 			const dy = e.touches[0].clientY - ty;
-			// палец ведёт текст вверх-вниз: свои экраны больше не годятся
-			if (Math.abs(dy) > 6 && Math.abs(dy) > Math.abs(dx)) {
-				setProg(null);
-				stack = [];
+			if (!dragging) {
+				// палец ведёт текст вверх-вниз: свои экраны больше не годятся
+				if (Math.abs(dy) > 6 && Math.abs(dy) > Math.abs(dx)) {
+					vertical = true;
+					setProg(null);
+					stack = [];
+				} else if (!vertical && !multi && Math.abs(dx) > DRAG_START_PX && Math.abs(dx) > Math.abs(dy) && canDrag()) beginDrag();
 			}
+			if (dragging) dragMove(dx);
 		},
 		{ passive: true },
 	);
@@ -732,6 +1027,10 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			const t = e.changedTouches[0];
 			const dx = t.clientX - tx;
 			const dy = t.clientY - ty;
+			if (dragging) {
+				endDrag(dx, performance.now() - t0, false);
+				return;
+			}
 			// длинный сдвиг или быстрый рывок листает экран; вертикальный ход пальца — прокрутка
 			if (Math.abs(dx) > Math.abs(dy)) {
 				const dir = swipeDecision(dx, performance.now() - t0, win.clientWidth, SWIPE_PX);
@@ -740,6 +1039,14 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 					if (!pgSel.has()) turn(dir);
 				}
 			}
+		},
+		{ passive: true },
+	);
+	win.addEventListener(
+		"touchcancel",
+		() => {
+			multi = false;
+			if (dragging) endDrag(0, 1, true);
 		},
 		{ passive: true },
 	);
@@ -841,6 +1148,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			}
 			clearTimeout(hereTimer);
 			clearTimeout(idleTimer);
+			abortSlide();
 			observer?.disconnect();
 			window.removeEventListener("resize", onResize);
 			document.removeEventListener("keydown", onKey);

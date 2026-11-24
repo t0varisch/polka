@@ -156,3 +156,15 @@
 .mode-ribbon .rb-chunk.last {
 	padding-bottom: 48px;
 }
+
+/* Лента: копия уходящего экрана лежит поверх окна на время съезда */
+.mode-ribbon {
+	position: relative;
+}
+.mode-ribbon .rb-ghost {
+	position: absolute;
+	overflow: hidden;
+	pointer-events: none;
+	user-select: none;
+	-webkit-user-select: none;
+}
