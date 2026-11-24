@@ -1360,10 +1360,10 @@ async function ribbonFlow(W, H, tag) {
 			await swipe(m0.x + m0.w * 0.8, m0.x + m0.w * 0.3);
 			const s1 = await rbMetrics(page);
 			// экран узнаём по строке, а не по scrollTop: кусок сверху может законно уйти из DOM и сдвинуть все координаты
-			step(s1.topId === s0.nextId && Math.abs(s1.topOff) <= 1.2, `${tag} лента: свайп влево — экран вперёд`, `верх ${s1.topId} (${s1.topOff?.toFixed(1)} px), ждали ${s0.nextId}`);
+			step(s1.topId !== undefined && s1.topId === s0.nextId && Math.abs(s1.topOff) <= 1.2, `${tag} лента: свайп влево — экран вперёд`, `верх ${s1.topId} (${s1.topOff?.toFixed(1)} px), ждали ${s0.nextId}`);
 			await swipe(m0.x + m0.w * 0.3, m0.x + m0.w * 0.8);
 			const s2 = await rbMetrics(page);
-			step(s2.topId === s0.topId && Math.abs(s2.topOff) <= 1.2, `${tag} лента: свайп вправо — прежний экран`, `верх ${s2.topId} (${s2.topOff?.toFixed(1)} px), ждали ${s0.topId}`);
+			step(s2.topId !== undefined && s2.topId === s0.topId && Math.abs(s2.topOff) <= 1.2, `${tag} лента: свайп вправо — прежний экран`, `верх ${s2.topId} (${s2.topOff?.toFixed(1)} px), ждали ${s0.topId}`);
 		}
 
 		// граница куска: до конца первого куска три экрана, дальше 15 касаний вперёд
@@ -1373,6 +1373,8 @@ async function ribbonFlow(W, H, tag) {
 			win.scrollTop = first.offsetTop + first.offsetHeight - 3 * win.clientHeight;
 		});
 		await rbSettle(page);
+		// Chrome съедает первое касание, если оно пришло вскоре после синтетических касаний CDP и программной прокрутки (событие click не приходит): без паузы счёт 15 вперёд и 15 назад сбивается
+		await page.waitForTimeout(1500);
 		const chunk0 = (await rbMetrics(page)).top?.chunk;
 		let nums = [await rbNum(page)];
 		let maxSections = 0;
@@ -1708,8 +1710,9 @@ async function slideFlow(W, H, tag) {
 			const ed2 = await slideInfo(page);
 			step(ed2.cx === 0 && (await rbScroll(page)) === 0 && (await dw(page)) === wStart, `${tag} ведение: у начала книги отпустил — на месте, листания нет`, JSON.stringify(ed2));
 		}
-		await page.evaluate((h) => document.querySelector(".rb-window").scrollBy(0, h * 1.5), m0.H);
-		await rbSettle(page);
+		// старт с узла сетки экранов: два листания клавишей от открытия книги (после прокрутки по строкам номер у рисунков может шагнуть на 2)
+		await page.waitForTimeout(1500); // первое касание после синтетических касаний CDP Chrome съедает
+		for (let i = 0; i < 2; i++) await nextScreen(page);
 
 		// касание справа: через ~90 мс копия уезжает влево, через 400 мс её нет, верх — ожидаемый экран
 		const a = await rbMetrics(page);
@@ -1721,14 +1724,14 @@ async function slideFlow(W, H, tag) {
 		await page.screenshot({ path: `${OUT}/${tag}-slide-mid.png` });
 		step(mid.ghost && mid.gx < -2 && mid.gx > -cw && mid.cx > 0 && mid.settled === "0", `${tag} съезд: через 90 мс копия уезжает влево, окно въезжает справа`, JSON.stringify(mid));
 		step(mid.ghostWords === 0 && (await dupWords(page)) === 0, `${tag} съезд: в копии нет span[data-w], слов с одним номером нет`, `в копии ${mid.ghostWords}, повторов ${await dupWords(page)}`);
-		// номер у начала книги может шагнуть на 2 (ячейка сетки у рисунка), как и при мгновенном листании: важно, что он уже конечный
 		const nMid = await rbNum(page);
-		step((await dw(page)) > wa && nMid > na && nMid <= na + 2, `${tag} съезд: место и номер страницы по новому экрану сразу`, `слово ${wa} -> ${await dw(page)}, номер ${na} -> ${nMid}`);
+		step((await dw(page)) > wa && nMid === na + 1, `${tag} съезд: место и номер страницы по новому экрану сразу`, `слово ${wa} -> ${await dw(page)}, номер ${na} -> ${nMid}`);
 		await page.waitForTimeout(310);
 		const after = await slideInfo(page);
 		const b = await rbMetrics(page);
 		step(!after.ghost && after.cx === 0 && after.settled === "1" && (await rbNum(page)) === nMid, `${tag} съезд: через 400 мс копии нет, окно на месте, номер не менялся`, JSON.stringify(after));
-		step(Math.abs(b.st - a.nextTop) <= 1.2 && Math.abs(b.topOff) <= 1.2 && (await onOpenPage(page)), `${tag} съезд: верх — ожидаемый экран, верхняя строка вровень с краем`, `${a.st} -> ${b.st}, ждали ${a.nextTop}, отступ ${b.topOff}`);
+		// экран узнаём по строке, а не по scrollTop: кусок сверху может законно уйти из DOM и сдвинуть координаты
+		step(b.topId !== undefined && b.topId === a.nextId && Math.abs(b.topOff) <= 1.2 && (await onOpenPage(page)), `${tag} съезд: верх — ожидаемый экран, верхняя строка вровень с краем`, `${a.topId} -> ${b.topId}, ждали ${a.nextId}, отступ ${b.topOff}`);
 		step((await dupWords(page)) === 0, `${tag} съезд: после съезда span[data-w] не дублируются`);
 
 		// три касания по 50 мс — ровно три экрана (те же, что при трёх касаниях с ожиданием); три обратно — исходный
@@ -1750,7 +1753,7 @@ async function slideFlow(W, H, tag) {
 			await page.waitForTimeout(50);
 		}
 		await rbSettle(page);
-		step(tSlow !== t1 && (await rbMetrics(page)).topId === tSlow && (await rbNum(page)) === nSlow && (await onOpenPage(page)) && Math.abs((await rbMetrics(page)).topOff) <= 1.2, `${tag} съезд: три касания по 50 мс — ровно три экрана`, `верх ${(await rbMetrics(page)).topId}, ждали ${tSlow}, номер ${n1} -> ${await rbNum(page)}, ждали ${nSlow}`);
+		step(tSlow !== t1 && nSlow === n1 + 3 && (await rbMetrics(page)).topId === tSlow && (await rbNum(page)) === n1 + 3 && (await onOpenPage(page)) && Math.abs((await rbMetrics(page)).topOff) <= 1.2, `${tag} съезд: три касания по 50 мс — ровно три экрана`, `верх ${(await rbMetrics(page)).topId}, ждали ${tSlow}, номер ${n1} -> ${await rbNum(page)}, ждали ${nSlow}`);
 		for (let i = 0; i < 3; i++) {
 			await tapAt("left");
 			await page.waitForTimeout(50);

@@ -813,7 +813,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		"scroll",
 		() => {
 			// прокрутку, что выставили мы сами, пальцем не считаем: касание следом должно листать
-			if (ownTop === null || Math.abs(win.scrollTop - ownTop) > 1.01) lastScrollAt = performance.now();
+			if (ownTop !== null && Math.abs(win.scrollTop - ownTop) <= 1.01) ownTop = null;
+			else lastScrollAt = performance.now();
 			if (progTarget === null) {
 				// прокрутка не наша (палец, колесо, клавиши браузера): прежние экраны уже не те
 				if (Math.abs(win.scrollTop - settledTop) > 1) stack = [];
@@ -988,6 +989,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	win.addEventListener(
 		"touchstart",
 		(e) => {
+			ownTop = null;
 			multi = e.touches.length > 1;
 			tx = e.touches[0].clientX;
 			ty = e.touches[0].clientY;
