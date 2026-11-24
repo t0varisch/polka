@@ -1221,6 +1221,38 @@ const rbWordOnTop = (p, w) =>
 		const top = (r.top + r.bottom) / 2 - lh / 2;
 		return Math.abs(top - wr.top) <= 1.5;
 	}, w);
+// Низ экрана: строка (или рисунок), что пересекает нижний край окна, закрыта шторкой цвета страницы целиком; последняя целая строка открыта.
+// need = false — снизу ничего не обрезано, проверять нечего
+const rbBottomCheck = async (p) => {
+	const { items, wr } = await rbItems(p);
+	const cur = await p.evaluate(() => {
+		const c = document.querySelector(".rb-curtain");
+		const w = document.querySelector(".rb-window");
+		if (!c) return null;
+		const r = c.getBoundingClientRect();
+		const cs = getComputedStyle(c);
+		return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, shown: cs.display !== "none" && cs.visibility !== "hidden" && r.height > 0, bg: cs.backgroundColor, inner: w.clientWidth, wl: w.getBoundingClientRect().left };
+	});
+	const full = items.filter((it) => it.top >= wr.top - 1.5 && it.bottom <= wr.bottom + 1.5);
+	const lastFull = full[full.length - 1];
+	const part = items.find((it) => it.top < wr.bottom - 1 && it.bottom > wr.bottom + 1.5);
+	if (!part) return { need: false, ok: true, info: "" };
+	const ok =
+		!!cur &&
+		cur.shown &&
+		cur.top <= part.top + 1 &&
+		cur.bottom >= wr.bottom - 1 &&
+		(!lastFull || cur.top >= lastFull.bottom - 1.5) &&
+		cur.left <= cur.wl + 1 &&
+		cur.right >= cur.wl + cur.inner - 1 &&
+		!/rgba\(0, 0, 0, 0\)|transparent/.test(cur.bg);
+	const r1 = (v) => (v == null ? null : +v.toFixed(1));
+	return {
+		need: true,
+		ok,
+		info: JSON.stringify({ part: part.id, partTop: r1(part.top - wr.top), lastBottom: lastFull ? r1(lastFull.bottom - wr.top) : null, H: r1(wr.height), cur: cur && { top: r1(cur.top - wr.top), bottom: r1(cur.bottom - wr.top), shown: cur.shown, bg: cur.bg } }),
+	};
+};
 const rbNum = (p) => p.evaluate(() => Number(/стр\. (\d+) из (\d+)/.exec(document.querySelector(".pg-foot")?.textContent ?? "")?.[1]));
 // Касание по рисунку открывает просмотр, а не листает: точку берём там, где рисунка нет
 const rbTap = async (p, side) => {
@@ -1284,12 +1316,14 @@ async function ribbonFlow(W, H, tag) {
 		// клавиши: вперёд (пробел, PageDown, →) и назад (←, PageUp); экран узнаём по строке, что не влезла
 		let prev = m3;
 		let ok = true;
+		const bottoms = [];
 		for (const key of ["Space", "PageDown", "ArrowRight"]) {
 			await page.keyboard.press(key);
 			await rbSettle(page);
 			const m = await rbMetrics(page);
 			ok = ok && m.topId === prev.nextId;
 			prev = m;
+			bottoms.push(await rbBottomCheck(page));
 		}
 		step(ok, `${tag} лента: клавиши Пробел, PageDown, → листают на экран`, `верх ${prev.topId}`);
 		let mb = null;
@@ -1297,8 +1331,11 @@ async function ribbonFlow(W, H, tag) {
 			await page.keyboard.press(key);
 			await rbSettle(page);
 			mb = await rbMetrics(page);
+			bottoms.push(await rbBottomCheck(page));
 		}
 		step(mb.topId === m3.topId, `${tag} лента: три раза назад — на исходный экран`, `${mb.topId} ждали ${m3.topId}`);
+		const cut = bottoms.filter((b) => b.need);
+		step(cut.every((b) => b.ok), `${tag} лента: внизу экрана нет обрезанной строки — та, что не влезла, закрыта целиком, целые открыты`, `проверено экранов ${cut.length} из ${bottoms.length}; ${cut.filter((b) => !b.ok).map((b) => b.info).join(" | ")}`);
 
 		// колесо мыши: одна засечка — одна строка; мелкая дельта (тачпад) копится до строки
 		await page.mouse.move(m0.x + m0.w / 2, m0.y + m0.H / 2);

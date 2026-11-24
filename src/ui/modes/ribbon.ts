@@ -123,7 +123,9 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	const content = h("div.rb-content", { lang });
 	const win = h("div.rb-window", { "data-settled": "1" }, content);
 	const foot = h("footer.pg-foot");
-	const view = h("div.mode-pages.mode-ribbon", {}, win, foot);
+	// шторка цвета страницы у нижнего края окна: строка, что не влезла целиком, не видна обрезанной (с неё начнётся следующий экран)
+	const curtain = h("div.rb-curtain", { "aria-hidden": "true" });
+	const view = h("div.mode-pages.mode-ribbon", {}, win, foot, curtain);
 
 	let disposed = false;
 	let hereTimer: ReturnType<typeof setTimeout> | undefined;
@@ -306,6 +308,27 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		}
 		flat = { tops, bottoms, words };
 		return flat;
+	}
+
+	/** Сколько окна с верхом t занято целыми строками: до верха строки, с которой начнётся следующий экран. Всё влезло — H. */
+	function visibleH(t: number): number {
+		const ix = index();
+		const n = nextScreenTop(ix.tops, ix.bottoms, t, H);
+		return n > t + 0.5 && n < t + H - 0.5 ? n - t : H;
+	}
+
+	/** Шторка закрывает низ окна под последней целой строкой экрана с верхом t. Во время прокрутки пальцем стоит, где была. */
+	function syncCurtain(t = win.scrollTop): void {
+		const v = H > 0 && loaded.length > 0 ? visibleH(t) : H;
+		if (v >= H - 0.5) {
+			curtain.style.display = "none";
+			return;
+		}
+		curtain.style.display = "";
+		curtain.style.left = `${win.offsetLeft}px`;
+		curtain.style.top = `${win.offsetTop + v}px`;
+		curtain.style.width = `${win.clientWidth}px`;
+		curtain.style.height = `${H - v}px`;
 	}
 
 	/** Сдвигает все запомненные положения: сверху добавили или убрали текст высотой delta. */
@@ -523,6 +546,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		placeTop = win.scrollTop;
 		fill(win.scrollTop);
 		fillTop = win.scrollTop;
+		syncCurtain();
 		updateFoot();
 		if (flash) flashHere(w);
 	}
@@ -650,6 +674,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		setScrollTop(t);
 		settledTop = win.scrollTop;
 		fillTop = win.scrollTop;
+		syncCurtain();
 		updatePlace();
 		clearTimeout(idleTimer);
 		idleTimer = setTimeout(() => onIdle(), IDLE_MS);
@@ -679,7 +704,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		g.style.left = `${win.offsetLeft}px`;
 		g.style.top = `${win.offsetTop}px`;
 		g.style.width = `${win.clientWidth}px`;
-		g.style.height = `${win.clientHeight}px`;
+		// уходящий экран — только целые строки, как он и был виден из-под шторки
+		g.style.height = `${visibleH(st)}px`;
 		view.append(g);
 		return g;
 	}
@@ -769,6 +795,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	function scrollToTarget(t: number): void {
 		// во время своей плавной прокрутки сверху не дописываем: поправка scrollTop оборвала бы её
 		t += fill(t, progTarget === null, loaded.length > MAX_CHUNKS + 2);
+		// шторка сразу по цели: строки едут под неподвижным краем
+		syncCurtain(t);
 		if (reducedMotion()) {
 			setProg(null);
 			setScrollTop(t);
@@ -818,6 +846,8 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		trim(win.scrollTop);
 		// после уборки места не дописываем: прокрутка стоит, а поправка от убранного куска не повод
 		fillTop = win.scrollTop;
+		// экран встал (в том числе после пальца): низ снова по целым строкам
+		syncCurtain();
 		updatePlace();
 	}
 
@@ -926,6 +956,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			setScrollTop(dragOrigTop);
 			settledTop = win.scrollTop;
 			dragShown = false;
+			syncCurtain();
 		}
 		dragPlan = planTurn(side, () => dragOrigTop, false);
 		if (!dragPlan) {
@@ -945,6 +976,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		settledTop = win.scrollTop;
 		fillTop = win.scrollTop;
 		dragShown = true;
+		syncCurtain();
 	}
 
 	function dragMove(dx: number): void {
@@ -982,6 +1014,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 				setScrollTop(dragOrigTop);
 				settledTop = win.scrollTop;
 				fillTop = win.scrollTop;
+				syncCurtain();
 			}
 			dragShown = false;
 			dragPlan = null;
@@ -1105,6 +1138,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			const tall = loaded.some((l) => l.figs.some((f) => (f.box.parentElement?.getBoundingClientRect().height ?? 0) > H));
 			if (!tall) {
 				reestimate();
+				syncCurtain();
 				updateFoot();
 				return;
 			}

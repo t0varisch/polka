@@ -161,8 +161,16 @@
 .mode-ribbon {
 	position: relative;
 }
+/* Лента: шторка цвета страницы закрывает строку, что не влезла в экран целиком; касания проходят сквозь неё в окно */
+.mode-ribbon .rb-curtain {
+	position: absolute;
+	z-index: 1;
+	background: var(--bg);
+	pointer-events: none;
+}
 .mode-ribbon .rb-ghost {
 	position: absolute;
+	z-index: 2;
 	overflow: hidden;
 	pointer-events: none;
 	user-select: none;
