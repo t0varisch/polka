@@ -69,8 +69,24 @@ const dm = (p) => p.evaluate(() => document.querySelector("div.book").dataset.mo
 // Слово-место стоит верхней строкой окна (после переноса строк оно может быть не первым в строке) или это первое слово верхней строки
 const onOpenPage = async (p) => {
 	const w = await dw(p);
-	return (await rbWordOnTop(p, w)) || (await rbMetrics(p)).top?.word === w;
+	return (await rbWordOnTop(p, w)) || (await rbMetrics(p)).top?.word === w || (await rbFigTopWord(p)) === w;
 };
+// Экран, где наверху рисунок (целой строки текста выше него нет): место — первое слово после рисунка (слово, перед абзацем которого он стоит)
+const rbFigTopWord = (p) =>
+	p.evaluate(() => {
+		const win = document.querySelector(".rb-window");
+		const wr = win.getBoundingClientRect();
+		const lh = parseFloat(getComputedStyle(document.querySelector(".rb-content")).lineHeight);
+		const els = [...win.querySelectorAll("figure, span[data-w]")].filter((e) => !e.closest("figure") || e.tagName === "FIGURE");
+		const topOf = (e) => {
+			const r = e.getClientRects()[0];
+			return e.tagName === "FIGURE" ? r.top : (r.top + r.bottom) / 2 - lh / 2;
+		};
+		const first = els.filter((e) => topOf(e) >= wr.top - 1.5).sort((a, b) => topOf(a) - topOf(b))[0];
+		if (!first || first.tagName !== "FIGURE") return null;
+		const next = els.find((e) => e.tagName !== "FIGURE" && first.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING);
+		return next ? Number(next.dataset.w) : null;
+	});
 // Место сохранилось после перекладки текста: слово w на верхней строке или место — первое слово верхней видимой строки, не дальше строки перед w
 const spotKept = async (p, w) => {
 	const d = await dw(p);
@@ -1176,6 +1192,7 @@ const rbMetrics = async (p) => {
 	return {
 		top: top ? { word: top.word, chunk: top.chunk } : null,
 		topId: first?.id,
+		topOff: first ? first.top - wr.top : null, // верхняя строка вровень с краем окна
 		nextId: nx?.id,
 		H: wr.height,
 		y: wr.top,
@@ -1242,7 +1259,7 @@ async function ribbonFlow(W, H, tag) {
 		step(!!(await page.$(".mode-ribbon .rb-window")) && !(await page.$(".pg-viewport")), `${tag} лента: открыта, колонок нет`);
 		step(!(await hscroll(page)), `${tag} лента: нет горизонтальной прокрутки`);
 		const m0 = await rbMetrics(page);
-		step(m0.st === 0 && m0.top?.word === (await dw(page)) && (await rbNum(page)) === 1, `${tag} лента: начало книги, страница 1`, JSON.stringify({ st: m0.st, top: m0.top, n: await rbNum(page) }));
+		step(m0.st === 0 && (await onOpenPage(page)) && (await rbNum(page)) === 1, `${tag} лента: начало книги, страница 1`, JSON.stringify({ st: m0.st, top: m0.top, n: await rbNum(page) }));
 		await shot("1-start");
 
 		// прокрутка на полтора экрана: место сдвинулось, верхнее слово видно целиком
@@ -1309,10 +1326,14 @@ async function ribbonFlow(W, H, tag) {
 		const stMid = (await rbMetrics(page)).st;
 		await rbSettle(page);
 		step((await topIdAfter()) === id2, `${tag} лента: две мелкие дельты (20 px) — строка ещё не набралась`, `${stMid}`);
-		for (let i = 0; i < 3; i++) await page.mouse.wheel(0, 10);
+		// пауза выше сбросила набранное (так задумано: палец остановился — счёт заново);
+		// теперь шлём по 10 px без пауз, пока сумма не дотянет до высоты строки — при любом шрифте
+		const lhNow = (await rbMetrics(page)).lh;
+		const nSmall = Math.ceil(lhNow / 10);
+		for (let i = 0; i < nSmall; i++) await page.mouse.wheel(0, 10);
 		await rbSettle(page);
 		const id3 = await topIdAfter();
-		step(id3 === L2[0].id, `${tag} лента: 20 и ещё 30 px мелкими дельтами — одна строка`, `верх ${id3}, ждали ${L2[0].id}`);
+		step(id3 === L2[0].id, `${tag} лента: мелкие дельты до высоты строки — одна строка`, `${nSmall}×10 px при строке ${lhNow.toFixed(2)}, верх ${id3}, ждали ${L2[0].id}`);
 		// стрелки вверх и вниз — по строке
 		const L3 = await nextLines();
 		for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowDown");
@@ -1338,9 +1359,11 @@ async function ribbonFlow(W, H, tag) {
 			const s0 = await rbMetrics(page);
 			await swipe(m0.x + m0.w * 0.8, m0.x + m0.w * 0.3);
 			const s1 = await rbMetrics(page);
-			step(Math.abs(s1.st - s0.nextTop) <= 1.2, `${tag} лента: свайп влево — экран вперёд`, `${s0.st} -> ${s1.st}`);
+			// экран узнаём по строке, а не по scrollTop: кусок сверху может законно уйти из DOM и сдвинуть все координаты
+			step(s1.topId === s0.nextId && Math.abs(s1.topOff) <= 1.2, `${tag} лента: свайп влево — экран вперёд`, `верх ${s1.topId} (${s1.topOff?.toFixed(1)} px), ждали ${s0.nextId}`);
 			await swipe(m0.x + m0.w * 0.3, m0.x + m0.w * 0.8);
-			step(Math.abs((await rbMetrics(page)).st - s0.st) <= 1.2, `${tag} лента: свайп вправо — прежний экран`, `${s0.st}`);
+			const s2 = await rbMetrics(page);
+			step(s2.topId === s0.topId && Math.abs(s2.topOff) <= 1.2, `${tag} лента: свайп вправо — прежний экран`, `верх ${s2.topId} (${s2.topOff?.toFixed(1)} px), ждали ${s0.topId}`);
 		}
 
 		// граница куска: до конца первого куска три экрана, дальше 15 касаний вперёд

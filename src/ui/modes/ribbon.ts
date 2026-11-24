@@ -129,8 +129,11 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	let fillTop = 0;
 	/** Куда едет наша плавная прокрутка; null — своей прокрутки сейчас нет. */
 	let progTarget: number | null = null;
-	/** Верхи экранов, с которых листали вперёд: «назад» возвращает ровно на прежний экран. Пальцем и колесом сбрасывается. */
-	let stack: number[] = [];
+	/**
+	 * Верхи экранов, с которых листали вперёд: «назад» возвращает ровно на прежний экран. Пальцем и колесом сбрасывается.
+	 * Верх хранится как кусок и отступ от его верха: убранный из DOM кусок не теряет свои экраны, а дописанный и убранный сверху куски не сдвигают их.
+	 */
+	let stack: { i: number; off: number }[] = [];
 	let lastScrollAt = -1e9;
 	let swipedAt = -1e9;
 
@@ -266,11 +269,15 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 	/** Сдвигает все запомненные положения: сверху добавили или убрали текст высотой delta. */
 	function shiftCoords(delta: number): void {
 		if (delta === 0) return;
-		stack = stack.map((v) => v + delta);
 		if (progTarget !== null) progTarget += delta;
 		placeTop += delta;
 		settledTop += delta;
 		fillTop += delta;
+	}
+
+	/** Верх элемента от верха содержимого: не зависит от прокрутки. */
+	function contentTop(el: HTMLElement): number {
+		return el.getBoundingClientRect().top - content.getBoundingClientRect().top;
 	}
 
 	function setScrollTop(v: number): void {
@@ -310,18 +317,19 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		const l = at === "start" ? loaded[0] : loaded[loaded.length - 1];
 		if (!l) return 0;
 		const ref = at === "start" ? loaded[1]?.section : undefined;
-		const before = ref ? ref.getBoundingClientRect().top : 0;
+		// верх соседа меряем в координатах содержимого, а прокрутку берём до уборки: у конца текста браузер при пересчёте прижимает scrollTop к новому максимуму,
+		// и поправка от этого прижатого значения уносит ленту выше нужного
+		const st0 = win.scrollTop;
+		const before = ref ? contentTop(ref) : 0;
 		l.section.remove();
 		if (at === "start") loaded.shift();
 		else loaded.pop();
 		flat = null;
 		if (!ref) return 0;
-		const delta = ref.getBoundingClientRect().top - before;
+		const delta = contentTop(ref) - before;
 		if (delta !== 0) {
-			setScrollTop(win.scrollTop + delta);
+			setScrollTop(st0 + delta);
 			shiftCoords(delta);
-			// экраны из убранного куска остались выше начала окна: туда «назад» уже не вернёт ровно
-			stack = stack.filter((v) => v >= 0);
 		}
 		return delta;
 	}
@@ -528,25 +536,45 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		pgSel.clear();
 		window.getSelection()?.removeAllRanges();
 		fill(progTarget ?? win.scrollTop, progTarget === null);
-		const base = progTarget ?? win.scrollTop;
-		const ix = index();
+		let base = progTarget ?? win.scrollTop;
 		let t: number;
-		let back: number | undefined;
+		let back = false;
 		if (dir === 1) {
+			const ix = index();
 			t = nextScreenTop(ix.tops, ix.bottoms, base, H);
 		} else {
 			const last = stack[stack.length - 1];
-			if (last !== undefined && last < base - 0.5) {
-				back = last;
-				t = last;
-			} else t = prevScreenTop(ix.tops, base, H);
+			// экран, с которого листали, мог лежать в куске, убранном сверху: дописываем его обратно
+			while (last !== undefined && loaded[0].i > last.i) mount(loaded[0].i - 1, "start");
+			// дописывание сверху сдвинуло прокрутку и цель: base считаем заново
+			base = progTarget ?? win.scrollTop;
+			const at = last === undefined ? undefined : stackTop(last);
+			if (at !== undefined && at < base - 0.5) {
+				back = true;
+				t = at;
+			} else t = prevScreenTop(index().tops, base, H);
 		}
 		// дальше конца окна не прокрутить
 		t = Math.max(0, Math.min(t, content.offsetHeight - H));
 		if (dir === 1 ? t <= base + 0.5 : t >= base - 0.5) return;
-		if (dir === 1) stack.push(base);
-		else if (back !== undefined) stack.pop();
+		if (dir === 1) stack.push(stackEntry(base));
+		else if (back) stack.pop();
 		scrollToTarget(t);
+	}
+
+	/** Верх экрана t как кусок и отступ от его верха. */
+	function stackEntry(t: number): { i: number; off: number } {
+		index();
+		let l = loaded.find((x) => t >= x.top - 0.5 && t < x.top + x.height - 0.5);
+		if (!l) l = t < loaded[0].top ? loaded[0] : loaded[loaded.length - 1];
+		return { i: l.i, off: t - l.top };
+	}
+
+	/** Верх экрана из стека в координатах содержимого; undefined — куска нет в DOM. */
+	function stackTop(e: { i: number; off: number }): number | undefined {
+		index();
+		const l = loaded.find((x) => x.i === e.i);
+		return l ? l.top + e.off : undefined;
 	}
 
 	/** Едет к верху t плавно (или сразу при «уменьшить движение»); куски вокруг цели дописываются до начала движения. */
