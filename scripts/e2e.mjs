@@ -1793,12 +1793,33 @@ async function ribbonFlow(W, H, tag) {
 			await rbSettle(page);
 			// вернуть значения по умолчанию
 			const w1 = await dw(page);
+			const topOff = (w) =>
+				page.evaluate((w) => {
+					const sp = document.querySelector(`.rb-window span[data-w="${w}"]`);
+					if (!sp) return null;
+					const lh = parseFloat(getComputedStyle(document.querySelector(".rb-content")).lineHeight);
+					const r = sp.getClientRects()[0];
+					return +((r.top + r.bottom) / 2 - lh / 2 - document.querySelector(".rb-window").getBoundingClientRect().top).toFixed(2);
+				}, w);
+			const onTop0 = await rbWordOnTop(page, w1);
+			const off0 = await topOff(w1);
 			await openSettings();
 			await pickOpt("Между абзацами", "нет");
 			await pickOpt("Красная строка", "обычная");
 			await pickOpt("Поля", "обычные");
 			await closeSheet();
-			step((await dw(page)) === w1 && (await rbWordOnTop(page, w1)) && Math.abs((await contentLeft()) - left0) <= 1 && !(await hscroll(page)), `${tag} лента: абзац и поля вернули, место то же`, `${w1} -> ${await dw(page)}`);
+			const dwN = await dw(page);
+			const onTop = await rbWordOnTop(page, w1);
+			const leftN = await contentLeft();
+			const hs = await hscroll(page);
+			const offN = await topOff(w1);
+			await page.waitForTimeout(1500);
+			const offL = await topOff(w1);
+			const stN = await page.evaluate(() => document.querySelector(".rb-window").scrollTop);
+			// WebKit при дробной строке (32.55 px) держит прокрутку целыми пикселями, а середина слова в нём лежит на ~1 px ниже центра строки:
+			// верхнее слово встаёт в 1-2 px от края. Поэтому смотрим, что слово вернулось туда же, где было до смены (±1.5 px), и осталось в верхней строке (≤3 px)
+			const backOk = offN !== null && off0 !== null && Math.abs(offN - off0) <= 1.5 && Math.abs(offN) <= 3;
+			step(dwN === w1 && backOk && Math.abs(leftN - left0) <= 1 && !hs, `${tag} лента: абзац и поля вернули, место то же`, `слово ${w1} -> ${dwN}, наверху ${onTop}, левое поле ${left0.toFixed(2)} -> ${leftN.toFixed(2)}, гориз. прокрутка ${hs}; до возврата наверху ${onTop0}, смещение ${off0}, после — смещение ${offN}, через 1.5 с ${offL}, scrollTop ${stN}`);
 		}
 
 		// закладка из выделенного: шесть слов
