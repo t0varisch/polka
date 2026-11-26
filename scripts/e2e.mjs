@@ -952,6 +952,51 @@ async function backFlow(W, H, tag) {
 		const tW = await chipText();
 		step((await dw(page)) !== cur && /^Вернуться на \d+%$/.test(tW ?? ""), `${tag} назад: «По слову», ползунок — подпись в процентах`, `«${tW}»`);
 
+		// плашка не закрывает органы управления режима
+		const overlap = (a, b) => !!a && !!b && a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+		const boxOf = (sel) =>
+			page.evaluate((s) => {
+				const e = document.querySelector(s);
+				if (!e) return null;
+				const r = e.getBoundingClientRect();
+				return { l: r.left, r: r.right, t: r.top, b: r.bottom };
+			}, sel);
+		const cbW = await chipBox();
+		const hitsW = [];
+		for (const s of [".mode-words .play", ".mode-words .controls", ".mode-words .control-row"]) if (overlap(cbW, await boxOf(s))) hitsW.push(s);
+		step(!!cbW && hitsW.length === 0, `${tag} назад: «По слову» — плашка не закрывает кнопки управления`, `${JSON.stringify(cbW)} пересечения: ${hitsW.join(", ") || "нет"}`);
+		await page.screenshot({ path: `${OUT}/${tag}-back-3-words.png` });
+
+		// «Печать»: прыжок по ползунку, плашка не закрывает ленту, цифры и подсказку
+		await toMode(page, "typing", ".mode-typing .tape span.cur");
+		await page.click('[aria-label="Оглавление и закладки"]');
+		await page.waitForSelector('.sheet-backdrop input[aria-label="Позиция в книге"]');
+		await page.evaluate((v) => {
+			const el = document.querySelector('.sheet-backdrop input[aria-label="Позиция в книге"]');
+			el.value = String(v);
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			el.dispatchEvent(new Event("change", { bubbles: true }));
+		}, 300);
+		await page.waitForTimeout(300);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(700);
+		const cbT = await chipBox();
+		const hitsT = [];
+		for (const s of [".mode-typing .tape-wrap", ".mode-typing .stats", ".mode-typing .type-hint", ".mode-typing .type-meta"]) if (overlap(cbT, await boxOf(s))) hitsT.push(s);
+		step(!!cbT && hitsT.length === 0 && cbT.r <= W && cbT.b <= H, `${tag} назад: «Печать» — плашка не закрывает ленту, цифры и подсказку`, `${JSON.stringify(cbT)} пересечения: ${hitsT.join(", ") || "нет"}`);
+		await page.screenshot({ path: `${OUT}/${tag}-back-4-typing.png` });
+
+		// настройки при открытой плашке: она убирается (номера страниц могут смениться)
+		await page.click('[aria-label="Настройки"]');
+		await page.waitForSelector(".sheet-backdrop");
+		await page.waitForTimeout(300);
+		step(!(await page.$(chip)), `${tag} назад: открыли настройки — плашки нет`);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(400);
+
+		await jumpToc();
+		await page.waitForTimeout(300);
+
 		// смена режима при открытой плашке
 		await page.click('[data-m="pages"]');
 		await page.waitForSelector(".rb-window span[data-w]", { timeout: 30000 });

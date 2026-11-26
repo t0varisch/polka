@@ -326,6 +326,10 @@ div.book {
 	-webkit-user-select: none;
 	transition: transform 0.16s ease, opacity 0.16s ease;
 }
+/* «Печать»: низ занят клавиатурой и пустой, плашка прижата к нему ближе, чем над подвалом «Страниц» */
+.book[data-mode="typing"] .back-chip {
+	bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+}
 .back-chip[hidden] {
 	display: none;
 }

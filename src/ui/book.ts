@@ -286,9 +286,18 @@ function mountBook(
 			const to = view.word();
 			const next = label("forward", to);
 			view.seek(back);
-			chip.show(next, () => go(to));
+			showChip(next, () => go(to));
 		};
-		chip.show(text, () => go(from));
+		showChip(text, () => go(from));
+	}
+
+	/** Плашка над органами управления режима: в «По слову» — над кнопками, в остальных — по CSS. */
+	function showChip(label: string, onGo: () => void): void {
+		chip.show(label, onGo);
+		const el = book.querySelector<HTMLElement>(".back-chip");
+		if (!el) return;
+		const controls = body.querySelector<HTMLElement>(".mode-words .controls");
+		el.style.bottom = controls ? `${Math.round(book.getBoundingClientRect().bottom - controls.getBoundingClientRect().top + 8)}px` : "";
 	}
 
 	/** Цитаты книги в Markdown; текст строится сразу, без await до share (жест для iPhone) */
@@ -345,6 +354,8 @@ function mountBook(
 	function openSettingsSheet(): void {
 		if (isDisposed()) return;
 		view?.pause();
+		// номера страниц могут смениться: подпись плашки устареет
+		chip.hide();
 		sheetClosers.push(openSettings(settings, () => ctx.saveSettings(), view?.settingsRows() ?? []));
 	}
 

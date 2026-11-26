@@ -118,9 +118,12 @@ export function createBackChip(
 			suppressClick = false;
 			return;
 		}
-		onGo();
-		// фокус на кнопке: пробел и Enter иначе нажмут плашку снова вместо листания
-		go.blur();
+		try {
+			onGo();
+		} finally {
+			// фокус на кнопке: пробел и Enter иначе нажмут плашку снова вместо листания
+			go.blur();
+		}
 	});
 	close.addEventListener("click", () => {
 		if (suppressClick) suppressClick = false;
