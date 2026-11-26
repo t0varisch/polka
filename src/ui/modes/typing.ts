@@ -14,6 +14,7 @@ import {
 import type { FontKind, Settings } from "../../settings";
 import { formatDuration, h, toast } from "../dom";
 import { FONT_OPTIONS, range, segmented, toggle } from "../settings-sheet";
+import { idleWakeLock, TYPING_IDLE_MS } from "../wakelock";
 import type { ModeFactory, ModeHost, ModeView } from "./types";
 
 /** Сколько символов держать в строке слева и справа от курсора. */
@@ -173,8 +174,12 @@ export const typingMode: ModeFactory = async (host: ModeHost, startWord: number)
 		setHint(session.correct === 0 ? "Печатай — время пойдёт с первой буквы" : "");
 	}
 
+	// Экран не гаснет, пока печатаешь; после пяти минут без нажатий замок отпускается
+	const wake = idleWakeLock(TYPING_IDLE_MS);
+
 	function press(ch: string): void {
 		if (pos >= len) return;
+		wake.poke();
 		if (s.typeSound && !audioReady) {
 			unlockAudio();
 			audioReady = true;
@@ -398,6 +403,7 @@ export const typingMode: ModeFactory = async (host: ModeHost, startWord: number)
 		destroy() {
 			sync();
 			disposed = true;
+			wake.release();
 			if (session.correct >= 100) {
 				toast(`Сессия: ${formatDuration(session.activeMs)}, ${session.cpm} зн/мин, точность ${session.accuracy.toFixed(1).replace(".", ",")}%`, 4000);
 			}
