@@ -1,5 +1,7 @@
 // Экран книги: верхняя панель, переключатель режимов, место в книге, закладки, настройки, сохранение
 import { makePosition, snippetAt } from "../core/anchor";
+import { quotesMarkdown, type QuoteItem } from "../core/quotes-md";
+import { sendText } from "./send-text";
 import { buildWords, type WordStream } from "../core/words";
 import { currentLibrary, regrantFolder } from "../library";
 import type { Library } from "../library/types";
@@ -289,6 +291,24 @@ function mountBook(
 		chip.show(text, () => go(from));
 	}
 
+	/** Цитаты книги в Markdown; текст строится сразу, без await до share (жест для iPhone) */
+	function exportQuotes(): void {
+		const items: QuoteItem[] = record.bookmarks
+			.filter((b) => b.quote)
+			.map((b) => ({
+				quote: b.quote ?? "",
+				chapter: chapterAt(sorted, b.word)?.title ?? null,
+				page: view?.pageOf?.(b.word) ?? null,
+				pct: Math.round(total > 1 ? (b.word / (total - 1)) * 100 : 0),
+			}));
+		if (items.length === 0) return;
+		const text = quotesMarkdown(record.title, record.author, items);
+		void sendText(text, record.title).then((r) => {
+			if (r === "copied") toast(`Скопировано цитат: ${items.length}`);
+			else if (r === "failed") toast("Не удалось скопировать");
+		});
+	}
+
 	function openNavSheet(): void {
 		if (isDisposed()) return;
 		view?.pause();
@@ -300,6 +320,7 @@ function mountBook(
 			word: () => (view ? view.word() : record.position.word),
 			seek: jump,
 			removeBookmark,
+			exportQuotes,
 		}),
 		);
 	}

@@ -62,6 +62,8 @@ export interface NavCtx {
 	word(): number;
 	seek(word: number): void;
 	removeBookmark(id: string): void;
+	/** Все закладки-цитаты одним текстом в Markdown; вызывается прямо из касания кнопки */
+	exportQuotes?(): void;
 }
 
 export function openNav(ctx: NavCtx): () => void {
@@ -106,6 +108,9 @@ export function openNav(ctx: NavCtx): () => void {
 		if (list.length === 0) {
 			marks.append(h("p.empty", {}, "Закладок пока нет. Значок закладки сверху отмечает текущее место"));
 			return;
+		}
+		if (ctx.exportQuotes && list.some((b) => b.quote)) {
+			marks.append(h("button.export-quotes", { type: "button", onclick: () => ctx.exportQuotes?.() }, "Цитаты в Markdown"));
 		}
 		for (const b of list) {
 			const ch = chapterAt(sorted, b.word);

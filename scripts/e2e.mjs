@@ -1149,6 +1149,12 @@ async function screenFlow(W, H, tag) {
 // Закладка из выделенного текста: цитата в списке, подсветка pg-mark, выделение снято — закладка с цитатой ещё 2 с
 async function markFlow(W, H, tag) {
 	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
+	// буфер для проверки «Цитат в Markdown» (в WebKit читать нельзя); share подменён и пишет вызовы
+	if (BROWSER === "chromium") await ctx.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+	await ctx.addInitScript(() => {
+		window.__shared = [];
+		Object.defineProperty(navigator, "share", { configurable: true, value: async (d) => void window.__shared.push(d) });
+	});
 	const page = await ctx.newPage();
 	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
 	page.on("console", (m) => m.type() === "error" && step(false, `${tag} ошибка в консоли`, m.text()));
@@ -1201,6 +1207,34 @@ async function markFlow(W, H, tag) {
 		let list = await bookmarkTexts();
 		step(list.length === 1 && list[0].quote && list[0].t === `«${quote}»`, `${tag} закладка-цитата: в списке «цитата»`, JSON.stringify(list));
 		await page.screenshot({ path: `${OUT}/${tag}-mark-list.png` });
+		// цитаты в Markdown: на телефоне (касание) вызывается «Поделиться», без него текст идёт в буфер
+		const expBtn = page.locator(".sheet-backdrop .export-quotes");
+		step((await expBtn.count()) === 1 && (await expBtn.textContent()) === "Цитаты в Markdown", `${tag} цитаты в Markdown: кнопка есть при закладке-цитате`);
+		const coarse = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
+		await page.waitForTimeout(1500);
+		await expBtn.click();
+		await page.waitForTimeout(500);
+		if (coarse) {
+			const shared = await page.evaluate(() => window.__shared);
+			step(shared.length === 1 && shared[0].text.startsWith("# ") && shared[0].text.includes(`> ${quote}`) && /\n— .*(стр\. \d+|\d+%)\n$/.test(shared[0].text), `${tag} цитаты в Markdown (касание): вызван share с текстом`, JSON.stringify(shared));
+			// без share (старый браузер) — путь через буфер: убираем share и жмём снова
+			await page.evaluate(() => Object.defineProperty(navigator, "share", { configurable: true, value: undefined }));
+			await expBtn.click();
+			await page.waitForTimeout(500);
+		}
+		step((await page.textContent("#toast")) === "Скопировано цитат: 1", `${tag} цитаты в Markdown (буфер): тост «Скопировано цитат: 1»`, await page.textContent("#toast"));
+		if (BROWSER === "chromium") {
+			const clip = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n");
+			step(clip.startsWith("# ") && clip.includes(`> ${quote}`) && /\n\n— .*стр\. \d+\n$/.test(clip), `${tag} цитаты в Markdown (буфер): в буфере текст с цитатой и «стр.»`, JSON.stringify(clip.slice(0, 200)));
+		}
+		// буфер запрещён и запасной путь не сработал — человек видит сообщение
+		await page.evaluate(() => {
+			Object.defineProperty(navigator.clipboard, "writeText", { configurable: true, value: () => Promise.reject(new DOMException("denied", "NotAllowedError")) });
+			document.execCommand = () => false;
+		});
+		await expBtn.click();
+		await page.waitForTimeout(500);
+		step((await page.textContent("#toast")) === "Не удалось скопировать", `${tag} цитаты в Markdown: буфер запрещён — тост «Не удалось скопировать»`, await page.textContent("#toast"));
 		step(!(await hscroll(page)), `${tag} закладка-цитата: нет горизонтальной прокрутки`);
 		await closeNav();
 		await page.waitForTimeout(3500); // запись
@@ -1239,6 +1273,7 @@ async function markFlow(W, H, tag) {
 		step((await marked()).length === 0 && (await page.textContent("#toast")) === "Закладка добавлена", `${tag} закладка-цитата: через 3 с после снятия — обычная закладка`);
 		list = await bookmarkTexts();
 		step(list.length === 1 && !list[0].quote && list[0].t.endsWith("…"), `${tag} закладка-цитата: обычная закладка в списке как раньше`, JSON.stringify(list));
+		step((await page.locator(".sheet-backdrop .export-quotes").count()) === 0, `${tag} цитаты в Markdown: без закладки-цитаты кнопки нет`);
 		step(!(await hscroll(page)), `${tag} закладка-цитата: список без горизонтальной прокрутки`);
 		await page.click('.sheet-backdrop [aria-label="Удалить закладку"]');
 		await closeNav();
