@@ -5,6 +5,7 @@ import { currentLibrary, regrantFolder } from "../library";
 import type { Library } from "../library/types";
 import type { Settings } from "../settings";
 import type { Bookmark, BookRecord, Mode, OpenedBook } from "../types";
+import { backLabel, createBackChip } from "./back-chip";
 import { h, icon, iconButton, toast } from "./dom";
 import { buildChapters, chapterAt, chapterTicks, openNav, tickLayer } from "./nav";
 import { type ModeFactory, type ModeHost, type ModeView } from "./modes/types";
@@ -210,6 +211,8 @@ function mountBook(
 		body,
 	);
 	root.replaceChildren(book);
+	// плашка живёт в экране книги, а не в режиме: режимы заменяются, плашка остаётся до смены режима
+	const chip = createBackChip(book);
 
 	function showMode(): void {
 		book.dataset.mode = mode;
@@ -267,6 +270,25 @@ function mountBook(
 		view?.marksChanged?.();
 	}
 
+	/** Прыжок из оглавления, закладки, ползунка, поиска: место запоминается, внизу плашка «Вернуться». */
+	function jump(w: number): void {
+		if (!view) return;
+		const from = view.word();
+		if (w === from) return view.seek(w);
+		const label = (kind: "back" | "forward", at: number): string =>
+			backLabel(kind, view?.pageOf?.(at) ?? null, total > 1 ? (at / (total - 1)) * 100 : 0);
+		const text = label("back", from);
+		view.seek(w);
+		const go = (back: number): void => {
+			if (!view) return;
+			const to = view.word();
+			const next = label("forward", to);
+			view.seek(back);
+			chip.show(next, () => go(to));
+		};
+		chip.show(text, () => go(from));
+	}
+
 	function openNavSheet(): void {
 		if (isDisposed()) return;
 		view?.pause();
@@ -276,7 +298,7 @@ function mountBook(
 			chapters,
 			bookmarks: () => record.bookmarks,
 			word: () => (view ? view.word() : record.position.word),
-			seek: (w) => view?.seek(w),
+			seek: jump,
 			removeBookmark,
 		}),
 		);
@@ -292,7 +314,7 @@ function mountBook(
 			stream,
 			sorted,
 			memo: searchMemo,
-			seek: (w) => view?.seek(w),
+			seek: jump,
 			onClose: () => (search = null),
 		});
 		search = sheet;
@@ -367,6 +389,7 @@ function mountBook(
 		try {
 			const word = view ? view.word() : record.position.word;
 			view?.pause();
+			chip.hide();
 			flush();
 			view?.destroy();
 			view = null;
@@ -506,6 +529,7 @@ function mountBook(
 		if (isDisposed()) return;
 		startSeq++;
 		// сначала закрываем режим (печать при этом сообщает итоги), потом одно сохранение
+		chip.destroy();
 		view?.destroy();
 		view = null;
 		flush();

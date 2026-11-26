@@ -45,3 +45,12 @@ export class PageNumbers {
 		return sum;
 	}
 }
+
+/**
+ * Номер страницы (с 1) для слова куска, которого нет в DOM: слово делит кусок на страницы поровну по числу слов.
+ * startPages — сколько страниц до куска, toWord — исключительно.
+ */
+export function pageInChunk(startPages: number, chunkPages: number, fromWord: number, toWord: number, word: number): number {
+	const share = (word - fromWord) / Math.max(1, toWord - fromWord);
+	return startPages + Math.min(chunkPages - 1, Math.max(0, Math.floor(share * chunkPages))) + 1;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateChunkPages, PageNumbers, paraLines } from "./pagecount";
+import { estimateChunkPages, PageNumbers, pageInChunk, paraLines } from "./pagecount";
 
 describe("paraLines", () => {
 	it("пустой абзац — 0 строк", () => {
@@ -48,5 +48,20 @@ describe("PageNumbers: кусок без страниц", () => {
 		p.setMeasured(1, 0);
 		expect(p.startOf(2)).toBe(3);
 		expect(p.total).toBe(6);
+	});
+});
+
+describe("pageInChunk", () => {
+	it("начало куска — первая его страница", () => {
+		expect(pageInChunk(10, 4, 100, 200, 100)).toBe(11);
+	});
+	it("последнее слово — последняя страница куска", () => {
+		expect(pageInChunk(10, 4, 100, 200, 199)).toBe(14);
+	});
+	it("середина при четырёх страницах — третья", () => {
+		expect(pageInChunk(10, 4, 100, 200, 150)).toBe(13);
+	});
+	it("кусок из одного слова — его единственная страница", () => {
+		expect(pageInChunk(10, 1, 100, 101, 100)).toBe(11);
 	});
 });

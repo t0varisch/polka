@@ -3,7 +3,7 @@
 // В DOM лежат не больше трёх кусков подряд: нужный дописывается рядом, дальний убирается, когда прокрутка стоит.
 import "./pages.css";
 import { buildChunks, chunkOfWord, type Chunk } from "../../core/chunks";
-import { PageNumbers } from "../../core/pagecount";
+import { PageNumbers, pageInChunk } from "../../core/pagecount";
 import { nextLineTop, nextScreenTop, prevLineTop, prevScreenTop, chainStart, locateCell, screenGrid } from "../../core/ribbon";
 import { swipeDecision } from "../../core/swipe";
 import type { FontKind, Settings } from "../../settings";
@@ -484,6 +484,31 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		const lastIn = loaded.length > 0 && loaded[loaded.length - 1].i === chunks.length - 1;
 		if (lastIn && win.scrollTop >= win.scrollHeight - win.clientHeight - 1) n = all;
 		foot.textContent = footText(Math.max(1, Math.min(n, all)), all, anchor, total);
+	}
+
+	/**
+	 * Номер страницы слова: кусок в DOM с сеткой — ячейка по верху строки слова (как в updateFoot), иначе оценка по доле слов куска.
+	 * Строка слова выше первой ячейки куска — она на последней странице предыдущего.
+	 */
+	function pageOfWord(w: number): number {
+		const all = pageNums.total;
+		w = Math.max(0, Math.min(w, Math.max(0, total - 1)));
+		const ci = chunkOfWord(chunks, w);
+		const start = pageNums.startOf(ci);
+		const l = loaded.find((x) => x.i === ci);
+		let n: number;
+		if (l && l.grid.length > 0 && l.lines.length > 0) {
+			let ln = l.lines[0];
+			for (const x of l.lines) if (x.word <= w) ln = x;
+			const top = ln.top;
+			let cell = -1;
+			for (let k = 0; k < l.grid.length; k++) if (l.grid[k] <= top + SCROLL_ROUND) cell = k;
+			n = start + cell + 1;
+		} else {
+			const c = chunks[ci];
+			n = pageInChunk(start, pageNums.startOf(ci + 1) - start, c.fromWord, c.toWord, w);
+		}
+		return Math.max(1, Math.min(n, all));
 	}
 
 	/** Место — первое слово верхней строки, видимой целиком; сообщается оболочке. */
@@ -1166,6 +1191,7 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 			openAt(anchor, true);
 			host.report(anchor);
 		},
+		pageOf: pageOfWord,
 		pause() {},
 		selection() {
 			return pgSel.current();

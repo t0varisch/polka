@@ -783,6 +783,163 @@ async function ticksFlow(W, H, tag) {
 	await ctx.close();
 }
 
+// Плашка «Вернуться» после прыжка: показ, возврат касанием, закрытие, смахивание, само пропадает, проценты в «По слову», смена режима
+async function backFlow(W, H, tag) {
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
+	const page = await ctx.newPage();
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} назад: ошибка страницы`, e.message));
+	page.on("console", (m) => m.type() === "error" && step(false, `${tag} назад: ошибка в консоли`, m.text()));
+	const chip = ".back-chip:not([hidden])";
+	const chipText = () => page.evaluate((sel) => document.querySelector(sel)?.querySelector(".back-chip-go")?.textContent ?? null, chip);
+	const chipBox = () =>
+		page.evaluate((sel) => {
+			const r = document.querySelector(sel)?.getBoundingClientRect();
+			return r ? { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width, h: r.height } : null;
+		}, chip);
+	const tapIn = async (sel) => {
+		const r = await page.evaluate((s) => {
+			const b = document.querySelector(s).getBoundingClientRect();
+			return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+		}, sel);
+		await page.touchscreen.tap(r.x, r.y);
+	};
+	// прыжок из оглавления на последний пункт
+	const jumpToc = async () => {
+		await page.click('[aria-label="Оглавление и закладки"]');
+		await page.waitForSelector(".sheet-backdrop .toc-item");
+		await page.waitForTimeout(300);
+		await page.locator(".sheet-backdrop .toc-item").last().click();
+		await page.waitForTimeout(700);
+	};
+	const jumpSearch = async (frac) => {
+		const pick = await pickPhrase(page, frac);
+		if (!pick) throw new Error("нет фразы для поиска");
+		await page.keyboard.press("Control+f");
+		await page.waitForSelector(".sheet-backdrop.open .search input", { timeout: 3000 });
+		await page.waitForTimeout(300);
+		await page.keyboard.type(pick.phrase.toUpperCase().replace(/Ё/g, "Е"), { delay: 5 });
+		await page.waitForTimeout(600);
+		await page.locator(".search-item").first().click();
+		await page.waitForTimeout(700);
+	};
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await openRibbon(page);
+		for (let i = 0; i < 3; i++) await nextScreen(page);
+		const w0 = await dw(page);
+		const n0 = await rbNum(page);
+		await jumpToc();
+		await rbSettle(page);
+		const w1 = await dw(page);
+		const n1 = await rbNum(page);
+		const t1 = await chipText();
+		step(w1 !== w0 && t1 === `Вернуться на стр. ${n0}`, `${tag} назад: после прыжка из оглавления плашка «Вернуться на стр. ${n0}»`, `${w0} -> ${w1}, плашка «${t1}»`);
+
+		// 320 px: плашка целиком в окне, горизонтальной прокрутки нет
+		const box = await chipBox();
+		const inside = !!box && box.l >= 0 && box.r <= W && box.t >= 0 && box.b <= H;
+		step(inside && !(await hscroll(page)), `${tag} назад: плашка целиком в окне, горизонтальной прокрутки нет`, JSON.stringify(box));
+		await page.screenshot({ path: `${OUT}/${tag}-back-1.png` });
+
+		await page.waitForTimeout(1500);
+		await tapIn(`${chip} .back-chip-go`);
+		await rbSettle(page);
+		const t2 = await chipText();
+		const d2 = await dw(page);
+		const n2 = await rbNum(page);
+		step(d2 === w0 && (await rbWordOnTop(page, w0)) && n2 === n0, `${tag} назад: касание плашки — прежнее место, подвал стр. ${n0}`, `слово ${d2} (было ${w0}), стр. ${n2}`);
+		step(t2 === `Обратно на стр. ${n1}`, `${tag} назад: плашка стала «Обратно на стр. ${n1}»`, `«${t2}»`);
+		await page.waitForTimeout(800);
+		step((await rbNum(page)) === n0 && (await dw(page)) === w0, `${tag} назад: касание плашки не перелистнуло страницу`, `стр. ${await rbNum(page)}, слово ${await dw(page)}`);
+
+		// крестик
+		await page.waitForTimeout(1500);
+		await tapIn(`${chip} .back-chip-x`);
+		await page.waitForTimeout(300);
+		step(!(await page.$(chip)) && (await dw(page)) === w0, `${tag} назад: крестик закрыл плашку, место на месте`);
+
+		// новый прыжок через поиск
+		await jumpSearch(0.6);
+		await rbSettle(page);
+		const wS = await dw(page);
+		const tS = await chipText();
+		step(wS !== w0 && /^Вернуться на стр\. \d+$/.test(tS ?? ""), `${tag} назад: прыжок через поиск — плашка снова`, `«${tS}»`);
+
+		// смахивание мышью влево на 60% ширины плашки
+		const sb = await chipBox();
+		if (sb) {
+			const y = sb.t + sb.h / 2;
+			const x0 = sb.l + sb.w * 0.8;
+			await page.mouse.move(x0, y);
+			await page.mouse.down();
+			for (let i = 1; i <= 8; i++) {
+				await page.mouse.move(x0 - ((sb.w * 0.6) / 8) * i, y);
+				await page.waitForTimeout(30);
+			}
+			const mid = await page.evaluate(() => document.querySelector(".back-chip").style.transform);
+			await page.screenshot({ path: `${OUT}/${tag}-back-2-swipe.png` });
+			await page.mouse.up();
+			await page.waitForTimeout(500);
+			step(/translateX\(-/.test(mid) && !(await page.$(chip)) && (await dw(page)) === wS, `${tag} назад: смахивание влево на 60% — плашки нет, место не сменилось`, `за пальцем «${mid}», слово ${await dw(page)}`);
+		} else step(false, `${tag} назад: плашка для смахивания не найдена`);
+
+		// короткое смахивание — плашка возвращается
+		await jumpToc();
+		const sb2 = await chipBox();
+		if (sb2) {
+			const y = sb2.t + sb2.h / 2;
+			const x0 = sb2.l + sb2.w * 0.5;
+			await page.mouse.move(x0, y);
+			await page.mouse.down();
+			for (let i = 1; i <= 4; i++) {
+				await page.mouse.move(x0 - ((sb2.w * 0.15) / 4) * i, y);
+				await page.waitForTimeout(150);
+			}
+			await page.mouse.up();
+			await page.waitForTimeout(500);
+			const back = await chipBox();
+			step(!!back && Math.abs(back.l - sb2.l) < 2, `${tag} назад: смахивание на 15% — плашка вернулась на место`, JSON.stringify(back));
+		}
+		await page.mouse.move(1, 1);
+		await page.waitForTimeout(300);
+
+		// сама пропадает: 10,5 с без касаний
+		await page.waitForTimeout(10500);
+		step(!(await page.$(chip)), `${tag} назад: через 10,5 с без касаний плашки нет`);
+
+		// «По слову»: ползунок «Позиция» — подпись в процентах
+		await toMode(page, "words", ".mode-words .word .p");
+		await page.click('[aria-label="Оглавление и закладки"]');
+		await page.waitForSelector('.sheet-backdrop input[aria-label="Позиция в книге"]');
+		const cur = await dw(page);
+		await page.evaluate((v) => {
+			const el = document.querySelector('.sheet-backdrop input[aria-label="Позиция в книге"]');
+			el.value = String(v);
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			el.dispatchEvent(new Event("change", { bubbles: true }));
+		}, 800);
+		await page.waitForTimeout(300);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(500);
+		const tW = await chipText();
+		step((await dw(page)) !== cur && /^Вернуться на \d+%$/.test(tW ?? ""), `${tag} назад: «По слову», ползунок — подпись в процентах`, `«${tW}»`);
+
+		// смена режима при открытой плашке
+		await page.click('[data-m="pages"]');
+		await page.waitForSelector(".rb-window span[data-w]", { timeout: 30000 });
+		await page.waitForTimeout(500);
+		step(!(await page.$(chip)), `${tag} назад: смена режима убрала плашку`);
+		step(!(await hscroll(page)), `${tag} назад: нет горизонтальной прокрутки`);
+	} catch (e) {
+		step(false, `${tag} назад: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-back-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+}
+
 // Листание на экран: клавиши подряд, свайп (Chromium), граница куска, палец вертикально, «уменьшить движение»
 async function screenFlow(W, H, tag) {
 	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
@@ -2033,6 +2190,7 @@ for (const [W, H] of SIZES) {
 		await markFlow(W, H, tag);
 		await (IMG ? ribbonImgFlow : ribbonFlow)(W, H, tag);
 		await slideFlow(W, H, tag);
+		await backFlow(W, H, tag);
 		continue;
 	}
 	await (IMG ? imgFlow : browserFlow)(W, H, tag);
@@ -2043,6 +2201,7 @@ for (const [W, H] of SIZES) {
 	await markFlow(W, H, tag);
 	await (IMG ? ribbonImgFlow : ribbonFlow)(W, H, tag);
 	await slideFlow(W, H, tag);
+	await backFlow(W, H, tag);
 	if (BROWSER === "chromium") await folderFlow(W, H, tag);
 	else console.log("SKIP режим папки: в WebKit нет showDirectoryPicker, запись в OPFS в Safari только из воркера");
 }
