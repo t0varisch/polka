@@ -69,12 +69,9 @@ export function createBackChip(
 	el.addEventListener("pointerdown", (e) => {
 		held = true;
 		arm();
+		// отметка прошлого смахивания не должна съесть это нажатие
+		suppressClick = false;
 		drag = { id: e.pointerId, x0: e.clientX, t0: e.timeStamp, dx: 0, moved: false };
-		try {
-			el.setPointerCapture(e.pointerId);
-		} catch {
-			// без захвата тоже работает: события идут, пока палец над плашкой
-		}
 	});
 	el.addEventListener("pointermove", (e) => {
 		if (!drag || e.pointerId !== drag.id) return;
@@ -82,6 +79,12 @@ export function createBackChip(
 		if (!drag.moved && Math.abs(drag.dx) > DRAG_SLOP) {
 			drag.moved = true;
 			el.classList.add("dragging");
+			// захват только для смахивания: с самого нажатия он глушит клики мышью по кнопкам
+			try {
+				el.setPointerCapture(e.pointerId);
+			} catch {
+				// без захвата тоже работает: события идут, пока указатель над плашкой
+			}
 		}
 		if (drag.moved) el.style.transform = `translateX(${drag.dx}px)`;
 	});
@@ -116,6 +119,8 @@ export function createBackChip(
 			return;
 		}
 		onGo();
+		// фокус на кнопке: пробел и Enter иначе нажмут плашку снова вместо листания
+		go.blur();
 	});
 	close.addEventListener("click", () => {
 		if (suppressClick) suppressClick = false;

@@ -73,6 +73,28 @@ describe("плашка «Вернуться»", () => {
 		expect(onGo).toHaveBeenCalledTimes(1);
 	});
 
+	it("после смахивания следующее нажатие на подпись вызывает onGo", () => {
+		const onGo = vi.fn();
+		const chip = createBackChip(parent);
+		chip.show("x", onGo);
+		const el = chipEl()!;
+		el.getBoundingClientRect = () => ({ width: 200 }) as DOMRect;
+		const fire = (type: string, x: number, t: number) => {
+			const e = new Event(type, { bubbles: true });
+			Object.defineProperties(e, { pointerId: { value: 1 }, clientX: { value: x }, timeStamp: { value: t } });
+			el.dispatchEvent(e);
+		};
+		// сдвиг на 10 px: больше порога нажатия, меньше порога смахивания (30% от 200)
+		fire("pointerdown", 100, 0);
+		fire("pointermove", 110, 500);
+		fire("pointerup", 110, 1000);
+		expect(visible()).toBe(true);
+		fire("pointerdown", 100, 2000);
+		fire("pointerup", 100, 2050);
+		el.querySelector<HTMLElement>(".back-chip-go")!.click();
+		expect(onGo).toHaveBeenCalledTimes(1);
+	});
+
 	it("второй show заменяет подпись и перезапускает отсчёт", () => {
 		const chip = createBackChip(parent);
 		chip.show("первая", () => {});

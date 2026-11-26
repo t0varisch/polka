@@ -903,6 +903,31 @@ async function backFlow(W, H, tag) {
 			const back = await chipBox();
 			step(!!back && Math.abs(back.l - sb2.l) < 2, `${tag} назад: смахивание на 15% — плашка вернулась на место`, JSON.stringify(back));
 		}
+		// настоящие клики мышью (захват указателя не должен глушить кнопки) и пробел после клика не жмёт плашку снова
+		await page.mouse.move(1, 1);
+		const wJ = await dw(page);
+		const lb = await page.evaluate((sel) => {
+			const r = document.querySelector(sel + " .back-chip-go").getBoundingClientRect();
+			return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+		}, chip);
+		await page.mouse.click(lb.x, lb.y);
+		await rbSettle(page);
+		const wM = await dw(page);
+		const tM = await chipText();
+		step(wM !== wJ && /^Обратно на стр\. \d+$/.test(tM ?? ""), `${tag} назад: клик мышью по подписи вернул на место`, `${wJ} -> ${wM}, «${tM}»`);
+		const nM = await rbNum(page);
+		await page.keyboard.press("Space");
+		await rbSettle(page);
+		const tM2 = await chipText();
+		step((await rbNum(page)) === nM + 1 && (await dw(page)) > wM && tM2 === tM, `${tag} назад: пробел после клика листает вперёд, второго прыжка нет`, `стр. ${nM} -> ${await rbNum(page)}, слово ${wM} -> ${await dw(page)}, «${tM2}»`);
+		const xb = await page.evaluate((sel) => {
+			const r = document.querySelector(sel + " .back-chip-x").getBoundingClientRect();
+			return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+		}, chip);
+		await page.mouse.click(xb.x, xb.y);
+		await page.waitForTimeout(300);
+		step(!(await page.$(chip)), `${tag} назад: клик мышью по крестику закрыл плашку`);
+		await jumpToc();
 		await page.mouse.move(1, 1);
 		await page.waitForTimeout(300);
 
