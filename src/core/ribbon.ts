@@ -42,9 +42,9 @@ export function prevScreenTop(lineTops: number[], top: number, height: number): 
 	return lineTops[a];
 }
 
-/** Верх следующей строки: наименьший верх больше top + 1. Нет — top. Для колеса мыши: одна засечка — одна строка. */
+/** Верх следующей строки: наименьший верх больше top + 2. Нет — top. 2 px — WebKit держит прокрутку в целых пикселях, строка в 1–2 px ниже верха окна уже стоит сверху. Для колеса мыши: одна засечка — одна строка. */
 export function nextLineTop(lineTops: number[], top: number): number {
-	const edge = top + 1;
+	const edge = top + 2;
 	let lo = 0;
 	let hi = lineTops.length;
 	while (lo < hi) {
@@ -55,9 +55,9 @@ export function nextLineTop(lineTops: number[], top: number): number {
 	return lo < lineTops.length ? lineTops[lo] : top;
 }
 
-/** Верх предыдущей строки: наибольший верх меньше top - 1. Нет — 0. */
+/** Верх предыдущей строки: наибольший верх меньше top - 2. Нет — 0. */
 export function prevLineTop(lineTops: number[], top: number): number {
-	const edge = top - 1;
+	const edge = top - 2;
 	let lo = 0;
 	let hi = lineTops.length;
 	while (lo < hi) {

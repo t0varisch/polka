@@ -69,7 +69,7 @@ describe("prevScreenTop", () => {
 describe("nextLineTop / prevLineTop", () => {
 	const { tops } = lines(10);
 
-	it("вперёд: наименьший верх строки больше top + 1", () => {
+	it("вперёд: наименьший верх строки больше top + 2", () => {
 		expect(nextLineTop(tops, 0)).toBe(30);
 		expect(nextLineTop(tops, 30)).toBe(60);
 		// верх чуть выше строки (дробные размеры) — всё равно следующая строка
@@ -77,15 +77,24 @@ describe("nextLineTop / prevLineTop", () => {
 		expect(nextLineTop(tops, 12)).toBe(30);
 	});
 
+	it("строка в 1–2 px ниже верха окна уже стоит сверху (WebKit, целые пиксели)", () => {
+		expect(nextLineTop(tops, 28.2)).toBe(60);
+		expect(nextLineTop(tops, 58.744)).toBe(90);
+	});
+
 	it("вперёд: следующей строки нет — top", () => {
 		expect(nextLineTop(tops, 270)).toBe(270);
 		expect(nextLineTop([], 5)).toBe(5);
 	});
 
-	it("назад: наибольший верх строки меньше top - 1", () => {
+	it("назад: наибольший верх строки меньше top - 2", () => {
 		expect(prevLineTop(tops, 90)).toBe(60);
 		expect(prevLineTop(tops, 60.5)).toBe(30);
 		expect(prevLineTop(tops, 70)).toBe(60);
+	});
+
+	it("строка в 1–2 px выше верха окна — та, что сверху, вверх едет на предыдущую", () => {
+		expect(prevLineTop(tops, 61.8)).toBe(30);
 	});
 
 	it("назад: строк выше нет — 0", () => {
