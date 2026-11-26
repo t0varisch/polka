@@ -23,7 +23,13 @@
 }
 .mode-pages .pg-content p {
 	margin: 0;
-	text-indent: 1.4em;
+	text-indent: var(--pg-indent, 1.4em);
+}
+/* промежуток только между соседними абзацами текста; подпись рисунка и заголовок остаются как были */
+.mode-pages .pg-content p + p,
+.mode-pages .pg-content h2 + p,
+.mode-pages .pg-content figure + p {
+	margin-top: var(--pg-gap, 0px);
 }
 .mode-pages .pg-content h2 {
 	margin: 0;

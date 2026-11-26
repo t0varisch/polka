@@ -1435,6 +1435,7 @@ const rbBottomCheck = async (p) => {
 		info: JSON.stringify({ part: part.id, partTop: r1(part.top - wr.top), lastBottom: lastFull ? r1(lastFull.bottom - wr.top) : null, H: r1(wr.height), cur: cur && { top: r1(cur.top - wr.top), bottom: r1(cur.bottom - wr.top), shown: cur.shown, bg: cur.bg } }),
 	};
 };
+const rbTotal = (p) => p.evaluate(() => Number(/стр\. (\d+) из (\d+)/.exec(document.querySelector(".pg-foot")?.textContent ?? "")?.[2]));
 const rbNum = (p) => p.evaluate(() => Number(/стр\. (\d+) из (\d+)/.exec(document.querySelector(".pg-foot")?.textContent ?? "")?.[1]));
 // Касание по рисунку открывает просмотр, а не листает: точку берём там, где рисунка нет
 const rbTap = async (p, side) => {
@@ -1691,6 +1692,79 @@ async function ribbonFlow(W, H, tag) {
 		await page.setViewportSize({ width: W, height: H });
 		await page.waitForTimeout(1000);
 		step((await dw(page)) === wf && (await rbWordOnTop(page, wf)), `${tag} лента: окно вернули, верхнее слово то же`);
+
+		// абзац и поля: промежуток «строка», красная «широкая», поля «широкие»; место держится, внизу целые строки
+		{
+			const pickOpt = async (label, text) => {
+				await page.locator(`.sheet-backdrop [role="radiogroup"][aria-label="${label}"] button:text-is("${text}")`).click();
+				await page.waitForTimeout(500);
+			};
+			const closeSheet = async () => {
+				await page.keyboard.press("Escape");
+				await page.waitForTimeout(800);
+				await rbSettle(page);
+			};
+			// промежуток между соседними абзацами: середина первой строки второго минус середина последней строки первого, минус строка
+			const paraGapPx = () =>
+				page.evaluate(() => {
+					const lh = parseFloat(getComputedStyle(document.querySelector(".rb-content")).lineHeight);
+					for (const p2 of document.querySelectorAll(".rb-window p + p:not(.pg-cap)")) {
+						const p1 = p2.previousElementSibling;
+						if (p1.tagName !== "P") continue;
+						const a = p1.querySelectorAll("span[data-w]");
+						const b = p2.querySelector("span[data-w]");
+						if (!a.length || !b) continue;
+						const ra = a[a.length - 1].getClientRects()[0];
+						const rb = b.getClientRects()[0];
+						return { gap: (rb.top + rb.bottom) / 2 - (ra.top + ra.bottom) / 2 - lh, lh };
+					}
+					return null;
+				});
+			const contentLeft = () => page.evaluate(() => document.querySelector(".rb-content").getBoundingClientRect().left - document.querySelector(".rb-window").getBoundingClientRect().left);
+			const w0 = await dw(page);
+			const n0 = await rbNum(page);
+			const m0 = await rbTotal(page);
+			const g0 = await paraGapPx();
+			const left0 = await contentLeft();
+			await openSettings();
+			await pickOpt("Между абзацами", "строка");
+			await pickOpt("Красная строка", "широкая");
+			await pickOpt("Поля", "широкие");
+			await closeSheet();
+			const n1 = await rbNum(page);
+			const m1 = await rbTotal(page);
+			const g1 = await paraGapPx();
+			const left1 = await contentLeft();
+			step((await dw(page)) === w0 && (await rbWordOnTop(page, w0)), `${tag} лента: абзац и поля, верхнее слово то же`, `${w0} -> ${await dw(page)}`);
+			step(!!g1 && Math.abs(g1.gap - g1.lh) <= 2 && (!g0 || Math.abs(g0.gap) <= 2), `${tag} лента: промежуток между абзацами ≈ строка`, `было ${g0 && g0.gap.toFixed(1)}, стало ${g1 && g1.gap.toFixed(1)} при строке ${g1 && g1.lh}`);
+			step(left1 > left0, `${tag} лента: левое поле шире`, `${left0.toFixed(1)} -> ${left1.toFixed(1)}`);
+			// книга с промежутками и широкими полями честно длиннее, поэтому смотрим на долю пройденного: она не скачет
+			step(Math.abs(n1 / m1 - n0 / m0) < 0.03, `${tag} лента: номер страницы не скачет, доля пройденного та же`, `${n0}/${m0} -> ${n1}/${m1}`);
+			await page.waitForTimeout(1500);
+			let bottomBad = "";
+			for (let i = 0; i < 5; i++) {
+				await page.keyboard.press("Space");
+				await rbSettle(page);
+				const bc = await rbBottomCheck(page);
+				if (!bc.ok) bottomBad += ` экран ${i + 1}: ${bc.info}`;
+			}
+			step(!bottomBad, `${tag} лента: абзац и поля, пять экранов — внизу целые строки`, bottomBad || "ок");
+			// 320 px: нет горизонтальной прокрутки
+			await page.setViewportSize({ width: 320, height: 640 });
+			await page.waitForTimeout(1000);
+			step(!(await hscroll(page)), `${tag} лента: абзац и поля на 320 px — без горизонтальной прокрутки`);
+			await page.setViewportSize({ width: W, height: H });
+			await page.waitForTimeout(1000);
+			await rbSettle(page);
+			// вернуть значения по умолчанию
+			const w1 = await dw(page);
+			await openSettings();
+			await pickOpt("Между абзацами", "нет");
+			await pickOpt("Красная строка", "обычная");
+			await pickOpt("Поля", "обычные");
+			await closeSheet();
+			step((await dw(page)) === w1 && (await rbWordOnTop(page, w1)) && Math.abs((await contentLeft()) - left0) <= 1 && !(await hscroll(page)), `${tag} лента: абзац и поля вернули, место то же`, `${w1} -> ${await dw(page)}`);
+		}
 
 		// закладка из выделенного: шесть слов
 		const mt = await rbMetrics(page);

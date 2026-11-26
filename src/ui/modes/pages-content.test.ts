@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createSelection, type SelPart } from "./pages-content";
+import { createSelection, pageMargin, type SelPart } from "./pages-content";
 
 /** Два куска лежат в одном контейнере, как в ленте: слова 10-12 и 13-14. */
 function setup(): { content: HTMLElement; parts: SelPart[]; spans: HTMLElement[] } {
@@ -67,5 +67,14 @@ describe("createSelection: несколько кусков", () => {
 		window.getSelection()?.addRange(r);
 		expect(sel.current()).toBeNull();
 		sel.destroy();
+	});
+});
+
+describe("pageMargin", () => {
+	it("поля по ширине и настройке", () => {
+		expect(pageMargin(390, "narrow")).toBe(12);
+		expect(pageMargin(390)).toBe(20);
+		expect(pageMargin(1280, "wide")).toBe(96);
+		expect(pageMargin(1280)).toBe(48);
 	});
 });

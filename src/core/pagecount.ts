@@ -11,12 +11,18 @@ export function estimateChunkPages(
 	paras: { chars: number; heading: boolean }[],
 	extraLines: number,
 	g: { charsPerLine: number; linesPerPage: number },
+	gapLines = 0,
+	indentChars = 2,
 ): number {
 	let lines = extraLines;
+	let count = 0;
 	for (const p of paras) {
 		if (p.chars <= 0) continue;
-		lines += p.heading ? Math.ceil((p.chars * 1.3) / Math.max(1, g.charsPerLine)) : paraLines(p.chars, g.charsPerLine);
+		count++;
+		lines += p.heading ? Math.ceil((p.chars * 1.3) / Math.max(1, g.charsPerLine)) : paraLines(p.chars, g.charsPerLine, indentChars);
 	}
+	// промежуток — между соседними абзацами
+	if (count > 1) lines += (count - 1) * gapLines;
 	return Math.max(1, Math.ceil(lines / Math.max(1, g.linesPerPage)));
 }
 

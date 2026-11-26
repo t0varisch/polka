@@ -12,6 +12,11 @@ export interface Settings {
 	pageSize: number;
 	lineHeight: number;
 	justify: boolean;
+	/** Промежуток между абзацами в долях высоты строки. */
+	paraGap: 0 | 0.5 | 1;
+	/** Красная строка, em. */
+	indent: 0 | 1.4 | 2.5;
+	margins: "narrow" | "normal" | "wide";
 	// По слову
 	wpm: number;
 	wordSize: number;
@@ -42,6 +47,9 @@ export const DEFAULTS: Settings = {
 	pageSize: narrow ? 19 : 21,
 	lineHeight: 1.55,
 	justify: false,
+	paraGap: 0,
+	indent: 1.4,
+	margins: "normal",
 	wpm: 300,
 	wordSize: narrow ? 48 : 80,
 	sound: true,

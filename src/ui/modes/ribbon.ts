@@ -203,12 +203,14 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 		if (w <= 0 || hh <= 0) return false;
 		lineH = s.pageSize * s.lineHeight;
 		const pageW = Math.min(w, MAX_PAGE_W);
-		const m = pageMargin(pageW);
+		const m = pageMargin(pageW, s.margins);
 		view.style.setProperty("--pg-font", FONT_FAMILY[s.pageFont]);
 		view.style.setProperty("--pg-size", `${s.pageSize}px`);
 		// Подпись под рисунком — другого рода шрифт, чем основной текст
 		view.style.setProperty("--pg-cap-font", s.pageFont === "serif" ? FONT_FAMILY.sans : FONT_FAMILY.serif);
 		view.style.setProperty("--pg-cap-style", s.pageFont === "serif" ? "normal" : "italic");
+		view.style.setProperty("--pg-indent", `${s.indent}em`);
+		view.style.setProperty("--pg-gap", `${Math.round(s.paraGap * lineH)}px`);
 		view.classList.toggle("justify", s.justify);
 		colW = pageW - 2 * m;
 		content.style.lineHeight = `${lineH}px`;
@@ -1210,6 +1212,9 @@ export async function ribbonMode(host: ModeHost, startWord: number): Promise<Mod
 				segmented<FontKind>("Шрифт", s.pageFont, FONT_OPTIONS, (v) => set("pageFont", v)),
 				range("Размер текста", s.pageSize, 14, 34, 1, (v) => `${v} px`, (v) => set("pageSize", v)),
 				range("Межстрочный интервал", s.lineHeight, 1.2, 2, 0.05, (v) => v.toFixed(2), (v) => set("lineHeight", v)),
+				segmented<0 | 0.5 | 1>("Между абзацами", s.paraGap, [[0, "нет"], [0.5, "полстроки"], [1, "строка"]], (v) => set("paraGap", v)),
+				segmented<0 | 1.4 | 2.5>("Красная строка", s.indent, [[0, "нет"], [1.4, "обычная"], [2.5, "широкая"]], (v) => set("indent", v)),
+				segmented<Settings["margins"]>("Поля", s.margins, [["narrow", "узкие"], ["normal", "обычные"], ["wide", "широкие"]], (v) => set("margins", v)),
 				toggle("По ширине", "Выравнивание с переносами слов", s.justify, (v) => set("justify", v)),
 			];
 		},

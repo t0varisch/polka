@@ -4,7 +4,7 @@ import type { Chunk } from "../../core/chunks";
 import { fitSize, imagesByChunk, maxImageHeight, settledWithin } from "../../core/figures";
 import { estimateChunkPages, PageNumbers, paraLines } from "../../core/pagecount";
 import { cleanQuote } from "../../core/quote";
-import type { FontKind } from "../../settings";
+import type { FontKind, Settings } from "../../settings";
 import type { BookImage } from "../../types";
 import { formatDuration, h } from "../dom";
 import type { ModeHost } from "./types";
@@ -23,8 +23,11 @@ export const FONT_FAMILY: Record<FontKind, string> = {
 };
 
 /** Поля страницы по ширине. */
-export function pageMargin(width: number): number {
-	return width < 600 ? 20 : 48;
+export function pageMargin(width: number, margins: Settings["margins"] = "normal"): number {
+	const narrow = width < 600;
+	if (margins === "narrow") return narrow ? 12 : 24;
+	if (margins === "wide") return narrow ? 32 : 96;
+	return narrow ? 20 : 48;
 }
 
 /** Язык для переносов: ru, если среди первых 2000 букв больше кириллицы. */
@@ -388,6 +391,9 @@ export function createSelection(content: HTMLElement, parts: () => SelPart[]): P
 /** Оценка страниц всех кусков под геометрию: страница — экран высотой colH, ширина текста colW; точные числа потом ставит раскладка. */
 export function estimateBookPages(host: ModeHost, chunks: Chunk[], tocSet: Set<number>, pc: PagesContent, geo: FigGeometry): PageNumbers {
 	const { colW, colH, lineH } = geo;
+	const st = host.settings;
+	const gapLines = st.paraGap;
+	const indentChars = st.indent / 0.7;
 	const charsPerLine = Math.max(10, Math.floor(colW / avgCharWidth(host)));
 	const g = { charsPerLine, linesPerPage: Math.max(1, colH / lineH) };
 	return new PageNumbers(
@@ -405,7 +411,7 @@ export function estimateBookPages(host: ModeHost, chunks: Chunk[], tocSet: Set<n
 				extra += Math.max(1, Math.ceil(fitSize(d.w, d.h, colW, Math.min(maxH, colH)).h / lineH));
 				if (im.title) extra += paraLines(im.title.length, charsPerLine, 0);
 			}
-			return estimateChunkPages(paras, extra, g);
+			return estimateChunkPages(paras, extra, g, gapLines, indentChars);
 		}),
 	);
 }

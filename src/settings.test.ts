@@ -11,4 +11,12 @@ describe("loadSettings", () => {
 		expect(s.pageFont).toBe(DEFAULTS.pageFont);
 		expect(s.lineHeight).toBe(DEFAULTS.lineHeight);
 	});
+
+	it("старые настройки получают абзац и поля по умолчанию", () => {
+		localStorage.setItem("polka:settings", JSON.stringify({ pageSize: 25 }));
+		const s = loadSettings();
+		expect(s.paraGap).toBe(0);
+		expect(s.indent).toBe(1.4);
+		expect(s.margins).toBe("normal");
+	});
 });

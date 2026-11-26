@@ -5,6 +5,10 @@ describe("paraLines", () => {
 	it("пустой абзац — 0 строк", () => {
 		expect(paraLines(0, 40)).toBe(0);
 	});
+	it("ширина красной строки меняет число строк", () => {
+		expect(paraLines(10, 10, 0)).toBe(1);
+		expect(paraLines(10, 10, 4)).toBe(2);
+	});
 	it("отступ входит в длину", () => {
 		expect(paraLines(38, 40)).toBe(1);
 		expect(paraLines(39, 40)).toBe(2);
@@ -24,6 +28,12 @@ describe("estimateChunkPages", () => {
 	});
 	it("добавочные строки считаются", () => {
 		expect(estimateChunkPages([{ chars: 100, heading: false }], 5, g)).toBe(2);
+	});
+	it("промежутки между абзацами считаются строками", () => {
+		const p = { chars: 10, heading: false };
+		const g4 = { charsPerLine: 40, linesPerPage: 4 };
+		expect(estimateChunkPages([p, p, p], 0, g4, 0)).toBe(1);
+		expect(estimateChunkPages([p, p, p], 0, g4, 1)).toBe(2);
 	});
 	it("пустой кусок — одна страница", () => {
 		expect(estimateChunkPages([], 0, g)).toBe(1);
