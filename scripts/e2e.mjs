@@ -1254,7 +1254,7 @@ async function markFlow(W, H, tag) {
 		await page.screenshot({ path: `${OUT}/${tag}-mark-list.png` });
 		// цитаты в Markdown: на телефоне (касание) вызывается «Поделиться», без него текст идёт в буфер
 		const expBtn = page.locator(".sheet-backdrop .export-quotes");
-		step((await expBtn.count()) === 1 && (await expBtn.textContent()) === "Цитаты в Markdown", `${tag} цитаты в Markdown: кнопка есть при закладке-цитате`);
+		step((await expBtn.count()) === 1 && (await expBtn.textContent()) === "Все цитаты одним текстом", `${tag} цитаты в Markdown: кнопка есть при закладке-цитате`);
 		const coarse = await page.evaluate(() => matchMedia("(pointer: coarse)").matches);
 		await page.waitForTimeout(1500);
 		await expBtn.click();

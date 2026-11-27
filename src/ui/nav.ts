@@ -110,7 +110,7 @@ export function openNav(ctx: NavCtx): () => void {
 			return;
 		}
 		if (ctx.exportQuotes && list.some((b) => b.quote)) {
-			marks.append(h("button.export-quotes", { type: "button", onclick: () => ctx.exportQuotes?.() }, "Цитаты в Markdown"));
+			marks.append(h("button.export-quotes", { type: "button", onclick: () => ctx.exportQuotes?.() }, "Все цитаты одним текстом"));
 		}
 		for (const b of list) {
 			const ch = chapterAt(sorted, b.word);
