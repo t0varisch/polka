@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { baseFor, fullPath, shareOrSave } from "./share-book";
+import { baseFor, fullPath, shareOrSave, wantsShare } from "./share-book";
 
 describe("baseFor", () => {
 	it("путь с верной последней папкой возвращается без слэша на конце", () => {
@@ -84,4 +84,16 @@ describe("shareOrSave", () => {
 		expect(share).not.toHaveBeenCalled();
 		expect(clicked).toEqual(["book.fb2"]);
 	});
+});
+
+describe("wantsShare", () => {
+	const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1";
+	const ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36";
+	const FB2 = "application/x-fictionbook+xml";
+	it("iPhone и fb2 — share", () => expect(wantsShare(true, true, FB2, IPHONE)).toBe(true));
+	it("Android и fb2 — сразу сохранить", () => expect(wantsShare(true, true, FB2, ANDROID)).toBe(false));
+	it("Android и pdf — share", () => expect(wantsShare(true, true, "application/pdf", ANDROID)).toBe(true));
+	it("Android и txt — share", () => expect(wantsShare(true, true, "text/plain", ANDROID)).toBe(true));
+	it("не касание — сохранить", () => expect(wantsShare(false, true, "application/pdf", IPHONE)).toBe(false));
+	it("нет navigator.share — сохранить", () => expect(wantsShare(true, false, "application/pdf", IPHONE)).toBe(false));
 });

@@ -2,6 +2,7 @@
 import type { Library } from "../library/types";
 import type { Settings } from "../settings";
 import type { BookFormat } from "../types";
+import { bookMime } from "../library/original";
 import { h, openSheet, toast } from "./dom";
 import { copyText } from "./send-text";
 
@@ -22,8 +23,15 @@ function isTouch(): boolean {
 	return typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 }
 
-function canTryShare(): boolean {
-	return isTouch() && typeof navigator.share === "function";
+/** Пробовать системное «Поделиться»: касание, есть share, и на Android тип файла из разрешённых (Chromium пропускает только PDF и TXT) */
+export function wantsShare(touch: boolean, hasShare: boolean, mime: string, ua: string): boolean {
+	if (!touch || !hasShare) return false;
+	if (/Android/i.test(ua) && mime !== "application/pdf" && mime !== "text/plain") return false;
+	return true;
+}
+
+function canTryShare(file: File): boolean {
+	return wantsShare(isTouch(), typeof navigator.share === "function", bookMime(file.name, file.type), navigator.userAgent);
 }
 
 function download(file: File): void {
@@ -41,7 +49,7 @@ function download(file: File): void {
  * Касание и есть navigator.share → системное окно; иначе или при отказе — скачивание
  */
 export async function shareOrSave(file: File, title: string): Promise<"shared" | "saved" | "cancelled"> {
-	if (canTryShare()) {
+	if (canTryShare(file)) {
 		const data: ShareData = { files: [file], title };
 		// canShare — не ворота: false сразу сохраняет, а true или отсутствие функции — пробуем share
 		const can = typeof navigator.canShare === "function" ? navigator.canShare(data) : true;
@@ -70,6 +78,12 @@ function pathForm(o: PathOpts, onSaved: () => void): HTMLElement {
 	const input = h("input", { type: "text", placeholder: "D:\\Книги", "aria-label": `Путь к папке «${o.folderName}»`, autocapitalize: "off", autocomplete: "off", spellcheck: "false" });
 	const err = h("p.share-error", { role: "alert" });
 	const save = h("button.primary", { type: "button" }, "Сохранить путь");
+	input.addEventListener("keydown", (e) => {
+		if (e.key === "Enter") {
+			e.preventDefault();
+			save.click();
+		}
+	});
 	save.addEventListener("click", () => {
 		const base = baseFor(input.value, o.folderName);
 		if (!base) {
@@ -137,12 +151,12 @@ export function openShareSheet(o: ShareOpts): () => void {
 
 	const wait = h("button.primary", { type: "button", disabled: true }, "Готовлю файл…");
 	body.append(wait);
-	const tried = canTryShare();
 	const orig = o.lib.original ? o.lib.original(o.key) : Promise.resolve(null);
 	orig.then(
 		(file) => {
 			if (closed) return;
 			if (!file) return noFile();
+			const tried = canTryShare(file);
 			const btn = h("button.primary", { type: "button" }, tried ? "Отправить файл" : "Сохранить файл");
 			let busy = false;
 			btn.addEventListener("click", () => {
@@ -150,10 +164,11 @@ export function openShareSheet(o: ShareOpts): () => void {
 				if (busy) return;
 				busy = true;
 				// без await до вызова: share требует жест нажатия
-				void shareOrSave(file, o.title).then((r) => {
-					busy = false;
-					if (r === "saved") toast(tried ? "Окно «Поделиться» не приняло файл — сохранил в Загрузки" : "Файл сохранён в Загрузки");
-				});
+				void shareOrSave(file, o.title)
+					.then((r) => {
+						if (r === "saved") toast(tried ? "Окно «Поделиться» не приняло файл — сохранил в Загрузки" : "Файл сохранён в Загрузки");
+					})
+					.finally(() => (busy = false));
 			});
 			wait.replaceWith(btn);
 		},

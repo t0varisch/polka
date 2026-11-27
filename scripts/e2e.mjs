@@ -2558,6 +2558,14 @@ async function shareFlow(W, H, tag) {
 		await fp.waitForTimeout(350);
 		const link = await fp.locator(".folder-row .link").allTextContents();
 		step(link.includes("Путь"), `${tag} путь: в строке папки ссылка «Путь»`, link.join(" | "));
+		// Enter в поле пути = «Сохранить путь»
+		await fp.click('.folder-row .link:has-text("Путь")');
+		await fp.click('.sheet-backdrop .share button:has-text("Изменить")');
+		await fp.fill(".sheet-backdrop .share input", "E:/Мои/testbooks");
+		await fp.press(".sheet-backdrop .share input", "Enter");
+		await fp.waitForSelector(".sheet-backdrop .share-path");
+		const viaEnter = await fp.locator(".sheet-backdrop .share-path").textContent();
+		step(viaEnter === "E:/Мои/testbooks", `${tag} путь: Enter в поле сохраняет путь`, viaEnter ?? "");
 	} catch (e) {
 		step(false, `${tag} путь: сценарий оборвался`, String(e.message).split("\n")[0]);
 		await fp.screenshot({ path: `${OUT}/${tag}-share-folder-ERROR.png` }).catch(() => {});
