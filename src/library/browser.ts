@@ -64,7 +64,7 @@ export class BrowserLibrary implements Library {
 				}
 			}
 			// книга уже была, а файла нет (добавлена до этой версии или не хватило места): кладём файл, запись не трогаем
-			if (existing && !(await hasFile(id))) await this.keepFile(id, file);
+			if (existing) await this.keepFile(id, file, true);
 			keys.push(id);
 		}
 		return keys;
@@ -88,8 +88,9 @@ export class BrowserLibrary implements Library {
 	}
 
 	/** Исходный файл рядом с книгой; не поместился — книга остаётся без файла, без ошибки */
-	private async keepFile(id: string, file: File): Promise<void> {
+	private async keepFile(id: string, file: File, onlyIfMissing = false): Promise<void> {
 		try {
+			if (onlyIfMissing && (await hasFile(id))) return;
 			await putFile(id, file);
 		} catch {
 			// книга без файла: «Поделиться» попросит добавить его ещё раз

@@ -15,6 +15,9 @@ export interface Schema extends DBSchema {
 
 let dbp: Promise<IDBPDatabase<Schema>> | null = null;
 
+/** Крючок для интерфейса: библиотека сама тосты не показывает */
+export const dbEvents: { onBlocked?: () => void } = {};
+
 /** Обновление базы по шагам: у тех, кто уже на версии 1, остаются книги, тексты и папка */
 export function upgradeDb(d: { createObjectStore(name: string, opts?: IDBObjectStoreParameters): unknown }, oldVersion: number): void {
 	if (oldVersion < 1) {
@@ -30,6 +33,16 @@ export function db(): Promise<IDBPDatabase<Schema>> {
 		dbp = openDB<Schema>("polka", 2, {
 			upgrade(d, oldVersion) {
 				upgradeDb(d, oldVersion);
+			},
+			// старое окно держит соединение версии 1: просим закрыть его
+			blocked() {
+				dbEvents.onBlocked?.();
+			},
+			// новое окно хочет обновить базу: отпускаем соединение, следующий db() откроет заново
+			blocking() {
+				const old = dbp;
+				dbp = null;
+				old?.then((c) => c.close()).catch(() => {});
 			},
 		});
 	}

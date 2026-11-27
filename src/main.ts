@@ -1,7 +1,7 @@
 import "./styles.css";
 import { registerSW } from "virtual:pwa-register";
 import { applyTheme, loadSettings, saveSettings, watchSystemTheme } from "./settings";
-import { askPersist } from "./library/db";
+import { askPersist, dbEvents } from "./library/db";
 import type { Mode } from "./types";
 import { toast } from "./ui/dom";
 import { openLibrary } from "./ui/library";
@@ -16,6 +16,7 @@ applyTheme(settings);
 watchSystemTheme(() => settings);
 // Просим браузер не вычищать книги из IndexedDB (на iPhone без этого Safari может удалить данные)
 askPersist();
+dbEvents.onBlocked = () => toast("Закрой другие окна Полки — обновляется хранилище", 6000);
 
 function persist(): void {
 	saveSettings(settings);

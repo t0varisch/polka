@@ -94,12 +94,13 @@ describe("BrowserLibrary: исходный файл", () => {
 		const [key] = await lib.addFiles([make()]);
 		store.failFile = false;
 		const rec = (await lib.record(key)) as BookRecord;
-		const changed: BookRecord = { ...rec, position: { ...rec.position, word: 7 }, updatedAt: rec.updatedAt + 1000 };
+		const changed: BookRecord = { ...rec, position: { ...rec.position, word: 7 }, bookmarks: [{ id: "b1", word: 3, snippet: "закладка", createdAt: 1 }], updatedAt: rec.updatedAt + 1000 };
 		await lib.save(changed);
 		const before = await lib.record(key);
 		await lib.addFiles([make()]);
 		expect(await lib.record(key)).toEqual(before);
 		expect((await lib.record(key))?.position.word).toBe(7);
+		expect((await lib.record(key))?.bookmarks.map((b) => b.id)).toEqual(["b1"]);
 		expect((await lib.original(key))?.name).toBe("podpisi.fb2");
 		await lib.remove(key);
 	});
