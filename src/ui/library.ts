@@ -125,7 +125,7 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 					{},
 					h("span.folder-name", {}, icon("folder", 18), h("span", {}, `Папка «${name}»`)),
 					h("button.link", { type: "button", onclick: () => openPathSheet({ folderName: name, settings: ctx.settings, saveSettings: () => (ctx.saveSettings(), render()) }) }, baseFor(ctx.settings.folderPath, name) ? "Путь" : "Указать путь"),
-				h("button.link", { type: "button", onclick: () => folderAction(pickFolder) }, "Сменить"),
+					h("button.link", { type: "button", onclick: () => folderAction(pickFolder) }, "Сменить"),
 					h("button.link", { type: "button", onclick: () => folderAction(forgetFolder) }, "Отключить папку"),
 				),
 				h("div.actions", {}, addBtn("Добавить книгу"), pasteBtn),

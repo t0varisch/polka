@@ -112,12 +112,8 @@ export interface ShareOpts extends Omit<PathOpts, "folderName"> {
 
 export function openShareSheet(o: ShareOpts): () => void {
 	const body = h("div.share");
-	const close = openSheet("Поделиться книгой", body);
 	let closed = false;
-	const sheetClose = () => {
-		closed = true;
-		close();
-	};
+	const sheetClose = openSheet("Поделиться книгой", body, () => (closed = true));
 
 	if (o.lib.kind === "folder" && o.folderName) {
 		const name = o.folderName;
@@ -129,7 +125,11 @@ export function openShareSheet(o: ShareOpts): () => void {
 			copy.addEventListener("click", () => {
 				void copyText(text).then((r) => toast(r === "copied" ? "Путь скопирован" : "Не удалось скопировать"));
 			});
-			body.replaceChildren(h("code.share-path", {}, text), copy);
+			body.replaceChildren(
+				h("code.share-path", {}, text),
+				copy,
+				h("p.share-hint", {}, "Вставь в поле «Имя файла» в окне выбора файла (Telegram, почта) или в адресную строку Проводника"),
+			);
 		};
 		show();
 		return sheetClose;
@@ -144,9 +144,14 @@ export function openShareSheet(o: ShareOpts): () => void {
 			if (closed) return;
 			if (!file) return noFile();
 			const btn = h("button.primary", { type: "button" }, tried ? "Отправить файл" : "Сохранить файл");
+			let busy = false;
 			btn.addEventListener("click", () => {
+				// второе нажатие, пока окно «Поделиться» открыто, ничего не делает
+				if (busy) return;
+				busy = true;
 				// без await до вызова: share требует жест нажатия
 				void shareOrSave(file, o.title).then((r) => {
+					busy = false;
 					if (r === "saved") toast(tried ? "Окно «Поделиться» не приняло файл — сохранил в Загрузки" : "Файл сохранён в Загрузки");
 				});
 			});

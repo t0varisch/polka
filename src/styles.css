@@ -232,6 +232,7 @@ a {
 }
 .books {
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	gap: 10px;
 }
 article.book {
@@ -1145,4 +1146,9 @@ input[type="checkbox"][role="switch"]:checked::before {
 }
 .share-row:hover {
 	background: var(--hover);
+}
+
+.share-hint {
+	color: var(--muted);
+	font-size: 13px;
 }

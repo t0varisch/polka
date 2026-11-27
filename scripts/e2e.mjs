@@ -2394,6 +2394,7 @@ async function shareFlow(W, H, tag) {
 			value: async (d) => {
 				const f = d.files?.[0];
 				window.__shared.push({ name: f?.name, size: f?.size, type: f?.type, active: navigator.userActivation?.isActive ?? null });
+				if (window.__shareMode === "slow") await new Promise((r) => setTimeout(r, 800));
 				if (window.__shareMode === "deny") throw new DOMException("нет жеста", "NotAllowedError");
 			},
 		});
@@ -2437,6 +2438,13 @@ async function shareFlow(W, H, tag) {
 		const shares = await page.locator(`article.book ${SHARE}`).count();
 		step(cards === 2 && shares === 1, `${tag} поделиться: значок есть у книги, у вставленного текста нет`, `карточек ${cards}, значков ${shares}`);
 
+		// карточка не шире экрана: страница не едет вбок, значок «Поделиться» на виду
+		const lay = await page.evaluate((sel) => {
+			const r = document.querySelector(`article.book ${sel}`).getBoundingClientRect();
+			return { sw: document.documentElement.scrollWidth, iw: innerWidth, l: Math.round(r.left), r: Math.round(r.right) };
+		}, SHARE);
+		step(lay.sw <= lay.iw && lay.l >= 0 && lay.r <= lay.iw, `${tag} поделиться: карточка книги в экране, значок виден`, JSON.stringify(lay));
+
 		// касание: лист и системное «Поделиться»
 		await openShare();
 		await page.waitForSelector('.sheet-backdrop .share button:has-text("Отправить файл"):not([disabled])');
@@ -2446,6 +2454,17 @@ async function shareFlow(W, H, tag) {
 		const sh = await page.evaluate(() => window.__shared[0]);
 		step(sh.name === basename(BOOK) && sh.size === size, `${tag} поделиться: share получил файл с именем и размером исходного`, JSON.stringify(sh));
 		if (BROWSER === "chromium") step(sh.active === true, `${tag} поделиться: share вызван внутри жеста нажатия`, `active ${sh.active}`);
+
+		// двойное касание, пока окно открыто: share один раз, скачивания нет
+		let downloads = 0;
+		const onDl = () => downloads++;
+		page.on("download", onDl);
+		await page.evaluate(() => ((window.__shareMode = "slow"), (window.__shared.length = 0)));
+		await sheetBtn("Отправить файл").dblclick();
+		await page.waitForTimeout(1500);
+		const shn = await page.evaluate(() => window.__shared.length);
+		page.off("download", onDl);
+		step(shn === 1 && downloads === 0, `${tag} поделиться: двойное касание — share один раз, без скачивания`, `share ${shn}, скачиваний ${downloads}`);
 
 		// окно «Поделиться» не приняло файл — скачивание
 		await page.evaluate(() => (window.__shareMode = "deny"));
