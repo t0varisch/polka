@@ -1,7 +1,7 @@
 import { buildWords } from "../core/words";
 import { parseFile, parseText } from "../parsers";
 import type { BookImage, BookRecord, OpenedBook, ParsedBook } from "../types";
-import { db, getText, putText } from "./db";
+import { db, getFile, getText, hasFile, putFile, putText } from "./db";
 import { bookId } from "./hash";
 import { newRecord, shouldReplace } from "./record";
 import { putTextSafe, staleText } from "./text";
@@ -52,6 +52,7 @@ export class BrowserLibrary implements Library {
 			if (!existing) {
 				const book = await parseFile(file, { onProgress: p?.onProgress, onStage: p?.onStage });
 				await this.store(id, book);
+				await this.keepFile(id, file);
 			} else if (!cached || staleText(cached, existing.format)) {
 				// книга есть, а текст пропал или разобран до рисунков: обновляем только текст, запись не трогаем
 				try {
@@ -62,6 +63,8 @@ export class BrowserLibrary implements Library {
 					if (!cached) throw new Error("не удалось разобрать файл");
 				}
 			}
+			// книга уже была, а файла нет (добавлена до этой версии или не хватило места): кладём файл, запись не трогаем
+			if (existing && !(await hasFile(id))) await this.keepFile(id, file);
 			keys.push(id);
 		}
 		return keys;
@@ -76,8 +79,21 @@ export class BrowserLibrary implements Library {
 
 	async remove(key: string): Promise<void> {
 		const d = await db();
-		const tx = d.transaction(["books", "texts"], "readwrite");
-		await Promise.all([tx.objectStore("books").delete(key), tx.objectStore("texts").delete(key), tx.done]);
+		const tx = d.transaction(["books", "texts", "files"], "readwrite");
+		await Promise.all([tx.objectStore("books").delete(key), tx.objectStore("texts").delete(key), tx.objectStore("files").delete(key), tx.done]);
+	}
+
+	async original(key: string): Promise<File | null> {
+		return getFile(key);
+	}
+
+	/** Исходный файл рядом с книгой; не поместился — книга остаётся без файла, без ошибки */
+	private async keepFile(id: string, file: File): Promise<void> {
+		try {
+			await putFile(id, file);
+		} catch {
+			// книга без файла: «Поделиться» попросит добавить его ещё раз
+		}
 	}
 
 	/** Считает слова и кладёт запись с текстом. */

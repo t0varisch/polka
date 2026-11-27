@@ -28,4 +28,6 @@ export interface Library {
 	addText(title: string, text: string): Promise<string>;
 	/** Только браузер. */
 	remove?(key: string): Promise<void>;
+	/** Исходный файл книги; null — его нет на устройстве. Только браузер */
+	original?(key: string): Promise<File | null>;
 }

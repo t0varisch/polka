@@ -1,5 +1,6 @@
 import { type DBSchema, type IDBPDatabase, openDB } from "idb";
 import type { BookImage, BookRecord, TocEntry } from "../types";
+import { bookMime } from "./original";
 import { type CachedText, TEXT_VERSION } from "./text";
 
 export interface Schema extends DBSchema {
@@ -8,21 +9,45 @@ export interface Schema extends DBSchema {
 	texts: { key: string; value: { id: string; paragraphs: string[]; toc: TocEntry[]; images?: BookImage[]; v?: number } };
 	/** Дескриптор выбранной папки под ключом "folder". */
 	handles: { key: string; value: unknown };
+	/** Исходный файл книги, чтобы им можно было поделиться */
+	files: { key: string; value: { id: string; name: string; type: string; data: ArrayBuffer } };
 }
 
 let dbp: Promise<IDBPDatabase<Schema>> | null = null;
 
+/** Обновление базы по шагам: у тех, кто уже на версии 1, остаются книги, тексты и папка */
+export function upgradeDb(d: { createObjectStore(name: string, opts?: IDBObjectStoreParameters): unknown }, oldVersion: number): void {
+	if (oldVersion < 1) {
+		d.createObjectStore("books", { keyPath: "id" });
+		d.createObjectStore("texts", { keyPath: "id" });
+		d.createObjectStore("handles");
+	}
+	if (oldVersion < 2) d.createObjectStore("files", { keyPath: "id" });
+}
+
 export function db(): Promise<IDBPDatabase<Schema>> {
 	if (!dbp) {
-		dbp = openDB<Schema>("polka", 1, {
-			upgrade(d) {
-				d.createObjectStore("books", { keyPath: "id" });
-				d.createObjectStore("texts", { keyPath: "id" });
-				d.createObjectStore("handles");
+		dbp = openDB<Schema>("polka", 2, {
+			upgrade(d, oldVersion) {
+				upgradeDb(d, oldVersion);
 			},
 		});
 	}
 	return dbp;
+}
+
+export async function getFile(id: string): Promise<File | null> {
+	const r = await (await db()).get("files", id);
+	return r ? new File([r.data], r.name, { type: r.type }) : null;
+}
+
+export async function putFile(id: string, file: File): Promise<void> {
+	const data = await file.arrayBuffer();
+	await (await db()).put("files", { id, name: file.name, type: bookMime(file.name, file.type), data });
+}
+
+export async function hasFile(id: string): Promise<boolean> {
+	return (await (await db()).getKey("files", id)) !== undefined;
 }
 
 /** Нет images в записи — рисунков нет, нет v — это версия 1 (до рисунков). */
