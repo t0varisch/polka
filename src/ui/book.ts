@@ -18,6 +18,7 @@ import { withProgress } from "./progress";
 import { resumeAt, stampUpdated, syncDecision } from "./resume";
 import { newSearchMemo, openSearch, type SearchSheet } from "./search";
 import { openSettings } from "./settings-sheet";
+import { openShareSheet } from "./share-book";
 
 export interface BookCtx {
 	settings: Settings;
@@ -94,7 +95,7 @@ export async function openBook(root: HTMLElement, key: string, urlMode: Mode | n
 			busy.textContent = "В книге не нашлось текста";
 			return;
 		}
-		teardown = mountBook(root, lib, opened, stream, urlMode, ctx, () => disposed, (v) => (disposed = v));
+		teardown = mountBook(root, lib, opened, stream, urlMode, ctx, () => disposed, (v) => (disposed = v), folderName ?? null);
 	}
 
 	await begin();
@@ -110,6 +111,7 @@ function mountBook(
 	ctx: BookCtx,
 	isDisposed: () => boolean,
 	setDisposed: (v: boolean) => void,
+	folderName: string | null,
 ): () => void {
 	const record = opened.record;
 	const total = stream.words.length;
@@ -356,7 +358,30 @@ function mountBook(
 		view?.pause();
 		// номера страниц могут смениться: подпись плашки устареет
 		chip.hide();
-		sheetClosers.push(openSettings(settings, () => ctx.saveSettings(), view?.settingsRows() ?? []));
+		const top: HTMLElement[] = [];
+		let closeSettings: (() => void) | null = null;
+		if (record.format !== "text") {
+			const share = h("button.share-row", { type: "button" }, icon("share", 20), h("span", {}, "Поделиться книгой"));
+			share.addEventListener("click", () => {
+				closeSettings?.();
+				sheetClosers.push(
+					openShareSheet({
+						title: record.title,
+						format: record.format,
+						lib,
+						key: record.id,
+						rel: record.file ?? null,
+						folderName,
+						settings,
+						saveSettings: () => ctx.saveSettings(),
+						addFile: () => ctx.goLibrary(),
+					}),
+				);
+			});
+			top.push(share);
+		}
+		closeSettings = openSettings(settings, () => ctx.saveSettings(), view?.settingsRows() ?? [], undefined, top);
+		sheetClosers.push(closeSettings);
 	}
 
 	const host: ModeHost = {

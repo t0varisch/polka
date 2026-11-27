@@ -33,6 +33,8 @@ export interface Settings {
 	typeSound: boolean;
 	caseSensitive: boolean;
 	punctuation: boolean;
+	/** Путь к папке с книгами на ПК, например D:\Книги — для полного пути в «Поделиться» */
+	folderPath: string;
 }
 
 const KEY = "polka:settings";
@@ -62,6 +64,7 @@ export const DEFAULTS: Settings = {
 	typeSound: false,
 	caseSensitive: true,
 	punctuation: true,
+	folderPath: "",
 };
 
 export const WPM_MIN = 100;

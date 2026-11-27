@@ -47,10 +47,11 @@ export function speedRow(s: Settings, set: (v: number) => void): HTMLElement {
  * Лист настроек: общий раздел (тема) и строки текущего режима.
  * onChange зовётся после любой правки общего раздела; строки режима сами сообщают о своих правках.
  */
-export function openSettings(s: Settings, onChange: (s: Settings) => void, modeRows: HTMLElement[] = [], onClose?: () => void): () => void {
+export function openSettings(s: Settings, onChange: (s: Settings) => void, modeRows: HTMLElement[] = [], onClose?: () => void, topRows: HTMLElement[] = []): () => void {
 	const body = h(
 		"div.settings",
 		{},
+		...topRows,
 		segmented<Theme>(
 			"Тема",
 			s.theme,

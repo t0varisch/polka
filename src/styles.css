@@ -1083,3 +1083,66 @@ input[type="checkbox"][role="switch"]:checked::before {
 	vertical-align: -2px;
 	margin-right: 6px;
 }
+
+/* окно «Поделиться книгой» и путь на ПК */
+.share {
+	display: grid;
+	gap: 12px;
+	padding-top: 6px;
+}
+.share p {
+	margin: 0;
+}
+.share-label {
+	display: grid;
+	gap: 6px;
+	font-size: 15px;
+}
+.share input {
+	width: 100%;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--bg);
+	font-size: 16px;
+}
+.share-path-form {
+	display: grid;
+	gap: 10px;
+}
+.share-path {
+	display: block;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--bg);
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+	font-size: 14px;
+	user-select: text;
+	-webkit-user-select: text;
+	overflow-wrap: anywhere;
+}
+.share-error {
+	color: var(--danger, #d33);
+	font-size: 14px;
+}
+.share-error:empty {
+	display: none;
+}
+.share-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 44px;
+	margin: 6px 0 4px;
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: transparent;
+	color: var(--fg);
+	font-weight: 600;
+}
+.share-row:hover {
+	background: var(--hover);
+}

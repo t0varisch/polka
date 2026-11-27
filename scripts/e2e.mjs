@@ -2381,6 +2381,171 @@ async function slideFlow(W, H, tag) {
 	await rctx.close();
 }
 
+// «Поделиться книгой»: файл через share или скачиванием, книга без файла, путь на ПК в режиме папки
+async function shareFlow(W, H, tag) {
+	const ctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true, acceptDownloads: true });
+	if (BROWSER === "chromium") await ctx.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+	// share подменён: пишет имя, размер, тип файла и «активен ли жест» в момент вызова; __shareMode = "deny" — отказ окна
+	await ctx.addInitScript(() => {
+		window.__shared = [];
+		window.__shareMode = "ok";
+		Object.defineProperty(navigator, "share", {
+			configurable: true,
+			value: async (d) => {
+				const f = d.files?.[0];
+				window.__shared.push({ name: f?.name, size: f?.size, type: f?.type, active: navigator.userActivation?.isActive ?? null });
+				if (window.__shareMode === "deny") throw new DOMException("нет жеста", "NotAllowedError");
+			},
+		});
+	});
+	const page = await ctx.newPage();
+	page.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
+	page.on("console", (m) => m.type() === "error" && step(false, `${tag} ошибка в консоли`, m.text()));
+	const SHARE = '[aria-label="Поделиться книгой"]';
+	const size = readFileSync(BOOK).length;
+	const sheetBtn = (name) => page.locator(`.sheet-backdrop .share button:not([disabled]):has-text("${name}")`);
+	const toLibrary = async () => {
+		await page.click('[aria-label="К библиотеке"]');
+		await page.waitForSelector("article.book");
+	};
+	const openShare = async () => {
+		await page.click(`article.book ${SHARE}`);
+		await page.waitForSelector(".sheet-backdrop .share");
+	};
+	const closeSheet = async () => {
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(350);
+	};
+	try {
+		await page.goto(base);
+		await page.waitForSelector(".library .actions");
+		await page.setInputFiles('input[type="file"]', BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(page, "pages", ".pg-content span[data-w]");
+		await page.waitForTimeout(1500);
+		for (let i = 0; i < 3; i++) await nextScreen(page);
+		const w = await dw(page);
+		await page.waitForTimeout(500);
+		await toLibrary();
+		// вставленный текст — без значка «Поделиться»
+		await page.click("text=Вставить текст");
+		await page.fill(".paste textarea", "Короткий текст для проверки. Он без файла.");
+		await page.click(".paste .primary");
+		await page.waitForSelector("div.book[data-mode]", { timeout: 30000 });
+		await toLibrary();
+		const cards = await page.locator("article.book").count();
+		const shares = await page.locator(`article.book ${SHARE}`).count();
+		step(cards === 2 && shares === 1, `${tag} поделиться: значок есть у книги, у вставленного текста нет`, `карточек ${cards}, значков ${shares}`);
+
+		// касание: лист и системное «Поделиться»
+		await openShare();
+		await page.waitForSelector('.sheet-backdrop .share button:has-text("Отправить файл"):not([disabled])');
+		await page.waitForTimeout(1500);
+		await sheetBtn("Отправить файл").click();
+		await page.waitForFunction(() => window.__shared.length > 0);
+		const sh = await page.evaluate(() => window.__shared[0]);
+		step(sh.name === basename(BOOK) && sh.size === size, `${tag} поделиться: share получил файл с именем и размером исходного`, JSON.stringify(sh));
+		if (BROWSER === "chromium") step(sh.active === true, `${tag} поделиться: share вызван внутри жеста нажатия`, `active ${sh.active}`);
+
+		// окно «Поделиться» не приняло файл — скачивание
+		await page.evaluate(() => (window.__shareMode = "deny"));
+		const [dl] = await Promise.all([page.waitForEvent("download"), sheetBtn("Отправить файл").click()]);
+		step(dl.suggestedFilename() === basename(BOOK), `${tag} поделиться: отказ окна — скачивание с именем исходного файла`, dl.suggestedFilename());
+		await page.waitForFunction(() => document.getElementById("toast")?.textContent?.includes("не приняло файл"));
+		step(true, `${tag} поделиться: тост про отказ окна и Загрузки`);
+		await closeSheet();
+
+		// книга без файла
+		await page.evaluate(
+			() =>
+				new Promise((res, rej) => {
+					const open = indexedDB.open("polka");
+					open.onerror = () => rej(open.error);
+					open.onsuccess = () => {
+						const tx = open.result.transaction("files", "readwrite");
+						tx.objectStore("files").clear();
+						tx.oncomplete = () => (open.result.close(), res());
+						tx.onerror = () => rej(tx.error);
+					};
+				}),
+		);
+		await openShare();
+		await page.waitForSelector('.sheet-backdrop .share button:has-text("Добавить файл")');
+		const msg = await page.locator(".sheet-backdrop .share p").first().textContent();
+		step(msg?.startsWith("Файла этой книги нет на устройстве"), `${tag} поделиться: книга без файла — сообщение и «Добавить файл»`, msg ?? "");
+		const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.click('.sheet-backdrop .share button:has-text("Добавить файл")')]);
+		await chooser.setFiles(BOOK);
+		await page.waitForSelector("div.book[data-mode]", { timeout: 90000 });
+		await toMode(page, "pages", ".pg-content span[data-w]");
+		const w2 = await dw(page);
+		step(w > 0 && w2 === w, `${tag} поделиться: файл добавлен ещё раз — место то же`, `${w} -> ${w2}`);
+
+		// в книге: первая строка настроек
+		await page.click('[aria-label="Настройки"]');
+		await page.waitForSelector(".sheet-backdrop .settings");
+		const first = await page.locator(".sheet-backdrop .settings > *").first().textContent();
+		step(first?.trim() === "Поделиться книгой", `${tag} поделиться: первая строка настроек в книге`, first ?? "");
+		await page.locator(".sheet-backdrop .settings > *").first().click();
+		await page.waitForSelector('.sheet-backdrop .share button:has-text("Отправить файл"):not([disabled])');
+		step(true, `${tag} поделиться: из книги тот же лист, файл снова на месте`);
+		await closeSheet();
+	} catch (e) {
+		step(false, `${tag} поделиться: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await page.screenshot({ path: `${OUT}/${tag}-share-ERROR.png` }).catch(() => {});
+	}
+	await ctx.close();
+
+	if (BROWSER !== "chromium") return;
+	// режим папки: путь на ПК
+	const fctx = await newCtx({ viewport: { width: W, height: H }, hasTouch: true });
+	await fctx.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+	const fp = await fctx.newPage();
+	fp.on("pageerror", (e) => !/ResizeObserver loop/.test(e.message) && step(false, `${tag} ошибка страницы`, e.message));
+	try {
+		await fp.goto(base + "?testfolder");
+		await fp.waitForSelector(".library .actions");
+		const bytes = [...readFileSync(BOOK)];
+		await fp.evaluate(
+			async ([b, name]) => {
+				const root = await navigator.storage.getDirectory();
+				const d = await root.getDirectoryHandle("testbooks", { create: true });
+				for await (const k of d.keys()) await d.removeEntry(k, { recursive: true });
+				const f = await d.getFileHandle(name, { create: true });
+				const wr = await f.createWritable();
+				await wr.write(new Uint8Array(b));
+				await wr.close();
+			},
+			[bytes, basename(BOOK)],
+		);
+		await fp.reload();
+		await fp.waitForSelector("article.book");
+		await fp.click(`article.book ${SHARE}`);
+		await fp.waitForSelector(".sheet-backdrop .share input");
+		await fp.fill(".sheet-backdrop .share input", "D:\\Другое");
+		await fp.click('.sheet-backdrop .share button:has-text("Сохранить путь")');
+		const err = await fp.locator(".sheet-backdrop .share-error").textContent();
+		step(err === "Последняя папка в пути должна называться «testbooks»", `${tag} путь: чужая папка — ошибка под полем`, err ?? "");
+		await fp.fill(".sheet-backdrop .share input", "D:\\testbooks\\");
+		await fp.click('.sheet-backdrop .share button:has-text("Сохранить путь")');
+		await fp.waitForSelector(".sheet-backdrop .share-path");
+		const want = `D:\\testbooks\\${basename(BOOK)}`;
+		const shown = await fp.locator(".sheet-backdrop .share-path").textContent();
+		step(shown === want, `${tag} путь: верный путь — полный путь книги`, shown ?? "");
+		await fp.click('.sheet-backdrop .share button:has-text("Скопировать путь")');
+		await fp.waitForFunction(() => document.getElementById("toast")?.textContent === "Путь скопирован");
+		const clip = await fp.evaluate(() => navigator.clipboard.readText());
+		step(clip === want, `${tag} путь: в буфере полный путь и тост «Путь скопирован»`, clip);
+		await fp.keyboard.press("Escape");
+		await fp.waitForTimeout(350);
+		const link = await fp.locator(".folder-row .link").allTextContents();
+		step(link.includes("Путь"), `${tag} путь: в строке папки ссылка «Путь»`, link.join(" | "));
+	} catch (e) {
+		step(false, `${tag} путь: сценарий оборвался`, String(e.message).split("\n")[0]);
+		await fp.screenshot({ path: `${OUT}/${tag}-share-folder-ERROR.png` }).catch(() => {});
+	}
+	await fctx.close();
+}
+
 console.log(`# ${BROWSER}, книга ${basename(BOOK)}, ${base}, снимки в ${OUT}`);
 for (const [W, H] of SIZES) {
 	const tag = `${BROWSER}-${bookName}-${W}x${H}`;
@@ -2399,6 +2564,7 @@ for (const [W, H] of SIZES) {
 	await ticksFlow(W, H, tag);
 	if (!IMG) await screenFlow(W, H, tag);
 	await markFlow(W, H, tag);
+	if (!IMG) await shareFlow(W, H, tag);
 	await (IMG ? ribbonImgFlow : ribbonFlow)(W, H, tag);
 	await slideFlow(W, H, tag);
 	await backFlow(W, H, tag);

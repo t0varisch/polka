@@ -12,6 +12,10 @@ describe("loadSettings", () => {
 		expect(s.lineHeight).toBe(DEFAULTS.lineHeight);
 	});
 
+	it("путь к папке по умолчанию не указан", () => {
+		expect(DEFAULTS.folderPath).toBe("");
+	});
+
 	it("старые настройки получают абзац и поля по умолчанию", () => {
 		localStorage.setItem("polka:settings", JSON.stringify({ pageSize: 25 }));
 		const s = loadSettings();

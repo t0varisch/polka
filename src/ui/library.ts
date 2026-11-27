@@ -8,6 +8,7 @@ import { formatDuration, h, icon, iconButton, openSheet, plural, toast } from ".
 import { inAppBrowser, isStandalone, platform } from "./inapp";
 import { withProgress } from "./progress";
 import { openSettings, speedRow } from "./settings-sheet";
+import { baseFor, openPathSheet, openShareSheet } from "./share-book";
 
 export interface LibraryCtx {
 	settings: Settings;
@@ -123,7 +124,8 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 					"div.folder-row",
 					{},
 					h("span.folder-name", {}, icon("folder", 18), h("span", {}, `Папка «${name}»`)),
-					h("button.link", { type: "button", onclick: () => folderAction(pickFolder) }, "Сменить"),
+					h("button.link", { type: "button", onclick: () => openPathSheet({ folderName: name, settings: ctx.settings, saveSettings: () => (ctx.saveSettings(), render()) }) }, baseFor(ctx.settings.folderPath, name) ? "Путь" : "Указать путь"),
+				h("button.link", { type: "button", onclick: () => folderAction(pickFolder) }, "Сменить"),
 					h("button.link", { type: "button", onclick: () => folderAction(forgetFolder) }, "Отключить папку"),
 				),
 				h("div.actions", {}, addBtn("Добавить книгу"), pasteBtn),
@@ -211,6 +213,21 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 				r ? h("span.book-progress", {}, h("i", { style: `width:${pct}%` })) : null,
 				h("span.book-status", {}, mode ? h("span.book-mode", { title: MODE_LABEL[mode] }, icon(MODE_ICON[mode], 14)) : null, status),
 			),
+			r?.format === "text" || !(r || it.path)
+				? null
+				: iconButton("share", "Поделиться книгой", () =>
+						openShareSheet({
+							title,
+							format: r?.format ?? "txt",
+							lib,
+							key: it.key,
+							rel: r?.file ?? it.path ?? null,
+							folderName: cur?.folderName ?? null,
+							settings: ctx.settings,
+							saveSettings: () => (ctx.saveSettings(), render()),
+							addFile: () => fileInput.click(),
+						}),
+					),
 			lib.remove
 				? iconButton("trash", "Удалить книгу", async () => {
 						if (!confirm(`Удалить «${title}» с этого устройства?`)) return;

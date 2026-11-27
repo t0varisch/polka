@@ -17,7 +17,7 @@ function copyViaTextarea(text: string): boolean {
 	}
 }
 
-async function copy(text: string): Promise<"copied" | "failed"> {
+export async function copyText(text: string): Promise<"copied" | "failed"> {
 	try {
 		if (navigator.clipboard?.writeText) {
 			await navigator.clipboard.writeText(text);
@@ -44,5 +44,5 @@ export async function sendText(text: string, title: string): Promise<"shared" | 
 			// другая ошибка «Поделиться» — копируем
 		}
 	}
-	return copy(text);
+	return copyText(text);
 }
